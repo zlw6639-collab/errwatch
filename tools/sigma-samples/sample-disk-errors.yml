@@ -1,0 +1,19 @@
+title: Disk Bad Block Or Controller Errors
+id: 2b222222-2222-4222-8222-222222222222
+status: test
+description: Detects storage-related system events that indicate bad blocks or controller errors.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        EventID:
+            - 7
+            - 11
+            - 51
+    condition: selection
+falsepositives:
+    - Failing USB cable
+level: high

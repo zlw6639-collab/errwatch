@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "_说明": "通知策略。expireMinutes：超过就不补弹（避免退出游戏后被一条旧故障骚扰）；apps 里 notify=false 的只计数不弹（静默）。",
+  "expireMinutes": 30,
+  "summaryAfterFullscreen": true,
+  "apps": [
+    { "match": ["acad", "autocad", "acadlt"], "notify": true },
+    { "match": ["vrchat", "ps_service_launcher", "ps_server"], "notify": true },
+    { "match": ["code", "devenv", "idea64", "pycharm64"], "notify": true }
+  ]
+}

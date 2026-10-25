@@ -1,0 +1,15 @@
+title: Unsupported Modifier Should Be Skipped
+id: 8b888888-8888-4888-8888-888888888888
+status: test
+description: Uses a base64 offset modifier that has no text-regex equivalent.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+detection:
+    selection:
+        CommandLine|base64offset|contains: 'Invoke-Mimikatz'
+    condition: selection
+falsepositives:
+    - Unknown
+level: critical

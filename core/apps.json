@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "_说明": "软件档案。报错先按 match 识别软件，再优先用该软件的 known 规则；匹配不到才回退通用 rules.json。logs 是排查入口，弹窗/报告里会显示。",
+  "apps": [
+    {
+      "id": "dsh-desktop",
+      "name": "DSH Desktop",
+      "match": [
+        "DSH Desktop",
+        "dsh-desktop",
+        "ElectronShell"
+      ],
+      "logs": [
+        "%APPDATA%\\DSH Desktop\\logs",
+        "%APPDATA%\\DSH Desktop\\Crashpad",
+        "%USERPROFILE%\\.dsh\\error-audit"
+      ],
+      "note": "GUI 本体。崩溃看 Crashpad dump，会话/插件报错看 logs，装了 error-audit 后看 ~/.dsh/error-audit",
+      "known": [
+        {
+          "pat": "0x80000003",
+          "why": "这个软件（DSH）的主程序自己触发了内部检查并主动停止（技术名：Electron 主进程断言失败）。常见原因：程序包（ASAR，一种打包格式）校验不通过、加载了不兼容的插件（DLL）、或程序版本与系统不匹配。",
+          "do": "重启 DSH；反复崩就查 Crashpad 最新 dump 的出错模块；必要时等官方新版",
+          "ref": "#89"
+        },
+        {
+          "pat": "scanner invalid output|Unexpected end of JSON input",
+          "why": "沙箱掐断子进程管道：plugin-vet 的扫描器 spawn 拿不到输出，不是插件坏也不是 DSH 坏",
+          "do": "纯刷日志，不用修；要真跑扫描请用一次 danger-full-access",
+          "ref": "#91"
+        },
+        {
+          "pat": "compaction cannot shadow",
+          "why": "会话被插件接管压缩后写死：失败的压缩记录照样落盘",
+          "do": "检查 dsh-cache-guard 是否 manual 模式；要关就显式写 mode: 'off'（id ≠ 包名）",
+          "ref": "#60"
+        }
+      ],
+      "detect": [
+        "path:%APPDATA%\\DSH Desktop"
+      ]
+    },
+    {
+      "id": "qq-bot",
+      "name": "QQ 机器人（NapCat + 桥接）",
+      "match": [
+        "QQ.exe",
+        "NapCat",
+        "qq_bridge",
+        "path:pythonw"
+      ],
+      "logs": [
+        "E:\\ai\\_qqbot\\bridge.log",
+        "E:\\ai\\_qqbot\\napcat-shell\\logs"
+      ],
+      "note": "判据永远是 30011 有没有 LISTENING；bridge.log 刷「连接失败」= NapCat 没注入，不是桥接死机",
+      "known": [
+        {
+          "pat": "10061|远程计算机拒绝网络连接",
+          "why": "NapCat 没注入：QQ 进程可能在跑，但 30011 没有监听，桥接连不上",
+          "do": "桌面临时终端跑 E:\\ai\\_qqbot\\start_napcat_admin.bat（要管理员），看到 UAC 点「是」",
+          "ref": "_qqbot/HANDOFF #9/#10"
+        },
+        {
+          "pat": "已有桥接实例在跑|30012 被占用",
+          "why": "端口锁被占：已有桥接进程存活，新实例退出",
+          "do": "正常现象；要重启先停旧的 pythonw 再起",
+          "ref": "_qqbot/HANDOFF #5"
+        }
+      ],
+      "detect": [
+        "path:E:\\ai\\_qqbot"
+      ]
+    },
+    {
+      "id": "vrchat",
+      "name": "VRChat / Unity",
+      "match": [
+        "VRChat",
+        "UnityPlayer",
+        "vrwebhelper",
+        "vrserver"
+      ],
+      "logs": [
+        "%USERPROFILE%\\AppData\\LocalLow\\VRChat\\VRChat\\output_log_*.txt"
+      ],
+      "note": "崩溃模块是 UnityPlayer.dll 时，优先怀疑插件/MOD 或显卡驱动；VRC 自己的日志在 LocalLow",
+      "known": [
+        {
+          "pat": "0xc0000005",
+          "why": "Unity 访问违例：常见于插件/MOD 冲突、显卡驱动崩溃或内存不足",
+          "do": "先重启；禁用最近装的 MOD/插件；更新显卡驱动；检查 VR 串流是否稳定",
+          "ref": "#79"
+        },
+        {
+          "pat": "0x80000003",
+          "why": "Unity 断点异常：断言失败，多为 MOD 注入与宿主不兼容",
+          "do": "移除最近改动的 MOD；用纯净模式启动验证",
+          "ref": "#79"
+        },
+        {
+          "pat": "0xe0000008",
+          "why": "未知异常码（0xe0000008）：VRC 侧的自定义失败码，非标准 NTSTATUS",
+          "do": "一般可忽略；若与 VRC 崩溃同时出现，看 VRC 自己的 output_log",
+          "ref": "#79"
+        }
+      ],
+      "detect": [
+        "path:%USERPROFILE%\\AppData\\LocalLow\\VRChat"
+      ]
+    },
+    {
+      "id": "comfyui",
+      "name": "ComfyUI / 本地出图",
+      "match": [
+        "path:python",
+        "ComfyUI",
+        "ComfyUI_windows_portable"
+      ],
+      "logs": [
+        "E:\\ai\\ComfyUI\\ComfyUI_windows_portable\\ComfyUI\\user\\comfyui.log",
+        "Windows 事件日志 System → Resource-Exhaustion"
+      ],
+      "note": "进程凭空消失先看「资源耗尽检测器」日志，不要凭直觉判成后台任务清理",
+      "known": [
+        {
+          "pat": "error=1450|ERROR_NO_SYSTEM_RESOURCES|Resource-Exhaustion",
+          "why": "内存耗尽（不是显卡显存）：程序锁定的内存（pinned memory，不会被系统换到硬盘的那部分）把 Windows 的内存提交上限吃满了，于是系统把进程关掉。",
+          "do": "降分辨率/降帧数；或用 --disable-pinned-memory（慢 2.17 倍）",
+          "ref": "#66"
+        },
+        {
+          "pat": "OutOfMemory|VAEDecode",
+          "why": "VAE 解码阶段内存不够：大图必须分块解码",
+          "do": "VAEDecodeTiled 的 tile_size 用 256、overlap 32，不要用大的",
+          "ref": "#55"
+        }
+      ],
+      "detect": [
+        "path:E:\\ai\\ComfyUI"
+      ]
+    },
+    {
+      "id": "agents-anywhere",
+      "name": "Agents Anywhere（桌面壳 / connector）",
+      "match": [
+        "Agents Anywhere",
+        "agents-anywhere",
+        "connector"
+      ],
+      "logs": [
+        "%APPDATA%\\Agents Anywhere",
+        "%USERPROFILE%\\.agents-anywhere"
+      ],
+      "note": "桌面壳 2.0.3 启动即崩（0x80000003）是已知问题；移动端在线靠 connector 连服务器，不靠桌面壳",
+      "known": [
+        {
+          "pat": "0x80000003.*Agents Anywhere|Agents Anywhere.*0x80000003",
+          "why": "桌面壳启动即崩：2.0.3 版本已知缺陷，重装同版本无效",
+          "do": "等官方新版；桌面壳不是必需，移动端靠 connector 即可",
+          "ref": "2026-10-22 实测"
+        },
+        {
+          "pat": "sync\\.failed|bridge\\.sync_failed|INTERNAL_ERROR",
+          "why": "connector 同步失败：本地进程活着但没连上服务器",
+          "do": "重新登录 Agents Anywhere；或重启 DSH 让插件重新初始化",
+          "ref": "2026-10-22 实测"
+        }
+      ],
+      "detect": [
+        "path:%LOCALAPPDATA%\\agents-anywhere-desktop-workbench-updater",
+        "process:connector"
+      ]
+    },
+    {
+      "id": "codex-sandbox",
+      "name": "Codex Sandbox Service",
+      "match": [
+        "CodexSandboxService",
+        "Codex"
+      ],
+      "logs": [],
+      "note": "非致命服务事件，常驻噪音源；除非 Codex 本身功能异常，否则不用管",
+      "known": [
+        {
+          "pat": "os error 1008|不存在的令牌|unable to restore package uninstall listener",
+          "why": "服务拿不到登录用户令牌（Windows 1008）：启动过早或登录账户不匹配，非致命",
+          "do": "可忽略；只在 Codex 功能异常时检查服务登录身份",
+          "ref": "2026-10-22 实测"
+        }
+      ],
+      "detect": [
+        "process:CodexSandboxService"
+      ]
+    },
+    {
+      "id": "pico-streaming",
+      "name": "PICO 串流服务（PICO Streaming Service）",
+      "match": [
+        "ps_service_launcher",
+        "ps_server",
+        "Streaming Service",
+        "parfait"
+      ],
+      "logs": [
+        "C:\\Program Files\\Streaming Service\\ps_service_launcher.log",
+        "C:\\Program Files\\Streaming Service\\ps_server.log",
+        "C:\\Program Files\\Streaming Service\\crash"
+      ],
+      "note": "PICO 头显的串流助手（把电脑画面传到 VR 头显）。它有一个启动器（launcher）负责盯着后台进程（ps_server）：后台进程一崩，启动器就把它拉起来；拉不起来时启动器自己也崩。默认开机自启，不玩 VR 时也可能在后台跑。",
+      "known": [
+        {
+          "pat": "0xc0000409",
+          "why": "PICO 串流服务里有个后台进程（ps_server）先异常退出，它的启动器（launcher）随即也跟着崩——崩的瞬间被系统的内存保护（ucrtbase，一个系统运行库）拦下。实测规律：启动器拉起后台进程 → 30~90 秒后后台进程崩、日志写「server abnormal exit」（服务器异常退出）→ 启动器也崩 → 再重启，一直循环。",
+          "do": "更新 PICO 串流助手到最新版；仍循环就先卸载（控制面板 → 程序），需要串流时再装最新版；不玩 VR 时可在任务管理器「启动」里禁用它。",
+          "ref": "2026-10-22 实测（v2.2.4.4）",
+          "verify": "打开 C:\\Program Files\\Streaming Service\\ps_service_launcher.log，搜「server abnormal exit」：有 → 确认是它的服务端在反复崩；再看最后一条的时间，和你看到崩溃的时间是否对得上。",
+          "verifyStatus": "verified"
+        }
+      ],
+      "detect": [
+        "path:C:\\Program Files\\Streaming Service"
+      ]
+    },
+    {
+      "id": "gstarcad",
+      "name": "浩辰CAD（GstarCAD）",
+      "match": [
+        "gcad",
+        "gstarcad",
+        "浩辰"
+      ],
+      "logs": [
+        "%LOCALAPPDATA%\\Gstarsoft\\GstarCAD\\R27",
+        "%LOCALAPPDATA%\\Gstarsoft\\GstarCAD"
+      ],
+      "note": "国产 AutoCAD 兼容 CAD，读写 DWG。自动保存（.sv$）默认落在 %LOCALAPPDATA%\\Temp —— 注册表 SAVEFILEPATH 实测如此；SAVETIME 没有可靠注册表值，所以工具只看「最近有没有真的产生过 .sv$」。",
+      "known": [],
+      "detect": [
+        "path:%LOCALAPPDATA%\\Gstarsoft",
+        "path:%ProgramFiles%\\Gstarsoft"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+title: Unexpected Shutdown With Known Filter
+id: 4d444444-4444-4444-8444-444444444444
+status: test
+description: Detects an unexpected shutdown, excluding planned restarts initiated by the update service.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        EventID: 6008
+    filter:
+        Message|contains: 'Windows Update'
+    condition: selection and not filter
+falsepositives:
+    - Power loss
+level: medium

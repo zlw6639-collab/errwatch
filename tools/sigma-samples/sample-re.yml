@@ -1,0 +1,17 @@
+title: MSI Install Failure 1603
+id: 6f666666-6666-4666-8666-666666666666
+status: test
+description: Detects MSI installer fatal error 1603 using an explicit regular expression.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: application
+detection:
+    selection:
+        EventID: 11708
+        Data|re: 'Installation failed.*1603'
+    condition: selection
+falsepositives:
+    - Unknown
+level: high

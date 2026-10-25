@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "_说明": "报错降噪配置。match 是正则，命中 provider 名或事件文本就忽略/降级。改完立即生效，不用重启任何东西。",
+  "_字段": {
+    "ignore": "完全忽略：不弹窗、不进报告（仍会记录到 ignored 日志）",
+    "quiet": "降级：进报告但不弹窗",
+    "aggregateMinutes": "同一来源+同一代码在该分钟内只报一次"
+  },
+  "aggregateMinutes": 30,
+  "ignore": [
+    {
+      "match": "CodexSandboxService",
+      "why": "Codex 沙盒服务的令牌警告（os error 1008），非致命，服务本身仍运行"
+    },
+    {
+      "match": "os error 1008",
+      "why": "无交互令牌上下文，Windows 常见噪音"
+    },
+    {
+      "match": "unable to restore package uninstall listener",
+      "why": "应用包卸载监听恢复失败，不影响功能"
+    },
+    {
+      "match": "Windows Defender|Defender",
+      "why": "杀软例行扫描/更新失败，通常自动恢复"
+    },
+    {
+      "match": "EdgeUpdate|GoogleUpdate",
+      "why": "浏览器更新器网络抖动，可忽略"
+    },
+    {
+      "match": "MoUsoCoreWorker|usoclient",
+      "why": "Windows 更新后台任务，失败会自动重试"
+    },
+    {
+      "match": "状态0x0|已成功启动|已成功停止|操作成功完成",
+      "why": "明确成功的记录（URL 保留成功、服务启停成功），不是故障"
+    }
+  ],
+  "quiet": [
+    {
+      "match": "MsiInstaller",
+      "why": "安装事件多但重要，保留在报告里、不弹窗"
+    },
+    {
+      "match": "DistributedCOM|DCOM 组件",
+      "why": "DCOM 组件启动失败：常见于软件反复探测，进报告但不弹窗"
+    }
+  ]
+}

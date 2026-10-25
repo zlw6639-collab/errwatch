@@ -1,0 +1,184 @@
+﻿{
+    "schema":  "errwatch-sigma-converted-rules",
+    "schemaVersion":  1,
+    "note":  "由 sigma-convert.ps1 从本地 Sigma 格式样例转换而来（近似：字段匹配 → 文本匹配）。规则内容自编，改规则请改源样例后重跑转换器。",
+    "license":  "MIT — 本产物中的规则由本项目自编（Sigma 仅作格式参考），不适用 DRL-1.1；仍保留每条规则的 author/uri 以便追溯",
+    "generatedAt":  "2026-10-24T18:02:24.1681778+08:00",
+    "source":  "E:\\ai\\_tools\\errwatch\\tools\\sigma-samples",
+    "count":  6,
+    "rules":  [
+                  {
+                      "id":  "sigma-1a111111",
+                      "title":  "Windows BugCheck (Blue Screen Recorded)",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-bugcheck.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-bugcheck.yml",
+                      "sigmaId":  "1a111111-1111-4111-8111-111111111111",
+                      "pat":  "(?sm)BugCheck",
+                      "why":  "Windows 记录了蓝屏（BugCheck）—— 系统因内核级错误重启过。先看有没有蓝屏代码和 Minidump，再判断是驱动还是硬件。",
+                      "do":  "高优先级：逐项核对下面的事件，确认是否真实发生；这是检测规则，errwatch 只负责指出命中，处置需人工判断",
+                      "ref":  "sigma:1a111111-1111-4111-8111-111111111111",
+                      "level":  "critical",
+                      "note":  "字段「Provider_Name」→ 已展平为文本匹配（原字段名在 errwatch 里不参与匹配）；等值/contains 在文本匹配下按「包含」处理；自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）；同时保留事件 ID 条件：两条路径都会判定；字段条件已保留：evtx 场景按字段精确匹配，不靠文本近似",
+                      "logsource":  "windows/system",
+                      "eventIds":  [
+                                       1001
+                                   ],
+                      "fieldConditions":  [
+                                              {
+                                                  "field":  "Provider_Name",
+                                                  "mod":  "",
+                                                  "values":  [
+                                                                 "BugCheck"
+                                                             ]
+                                              }
+                                          ],
+                      "verify":  "看事件 1001 详情里的 BugCheckCode（非 0 才是蓝屏）＋ 系统盘是否有 MEMORY.DMP；要进一步定位驱动栈需 WinDbg，普通用户做不了。",
+                      "verifyStatus":  "verified"
+                  },
+                  {
+                      "id":  "sigma-2b222222",
+                      "title":  "Disk Bad Block Or Controller Errors",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-disk-errors.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-disk-errors.yml",
+                      "sigmaId":  "2b222222-2222-4222-8222-222222222222",
+                      "pat":  "",
+                      "why":  "磁盘坏块或控制器错误 —— 这是会丢数据的信号。先备份重要文件，再跑 chkdsk /scan 看坏道、查 SMART。",
+                      "do":  "建议人工复核：命中即值得看一眼；请结合同期日志判断是否为真",
+                      "ref":  "sigma:2b222222-2222-4222-8222-222222222222",
+                      "level":  "high",
+                      "note":  "自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）；**仅按事件 ID 匹配**（该规则没有可用的文本条件）",
+                      "logsource":  "windows/system",
+                      "eventIds":  [
+                                       7,
+                                       11,
+                                       51
+                                   ],
+                      "verify":  "看事件 7 / 11 / 51 的详情（哪个盘、哪个扇区）；再用 CrystalDiskInfo 之类看「重新分配扇区」是否在增长 —— 增长就是盘在坏。",
+                      "verifyStatus":  "verified"
+                  },
+                  {
+                      "id":  "sigma-5e555555",
+                      "title":  "Kernel Power Loss Keywords",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-keyword.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-keyword.yml",
+                      "sigmaId":  "5e555555-5555-4555-8555-555555555555",
+                      "pat":  "(?sm)(Kernel-Power|unexpected\\ shutdown|did\\ not\\ shut\\ down\\ cleanly)",
+                      "why":  "系统日志里出现与断电/掉电相关的字样 —— 可能是异常掉电或供电不稳，配合 41 / 6008 一起看。",
+                      "do":  "信息性：通常用于关联分析，不必立即处理",
+                      "ref":  "sigma:5e555555-5555-4555-8555-555555555555",
+                      "level":  "informational",
+                      "note":  "关键词组：按文本包含匹配；自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）",
+                      "logsource":  "windows/",
+                      "verify":  "看同期是否有事件 41（Kernel-Power，BugcheckCode=0）或 6008；有 → 确实是异常掉电；只有关键词、无这两条 → 可能是误报。",
+                      "verifyStatus":  "verified"
+                  },
+                  {
+                      "id":  "sigma-6f666666",
+                      "title":  "MSI Install Failure 1603",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-re.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-re.yml",
+                      "sigmaId":  "6f666666-6666-4666-8666-666666666666",
+                      "pat":  "(?sm)(Installation failed.*1603)",
+                      "why":  "MSI 安装包报了 1603（安装失败）—— 常见原因是权限不足、旧版本残留或安装包损坏。",
+                      "do":  "建议人工复核：命中即值得看一眼；请结合同期日志判断是否为真",
+                      "ref":  "sigma:6f666666-6666-4666-8666-666666666666",
+                      "level":  "high",
+                      "note":  "字段「Data」→ 已展平为文本匹配（原字段名在 errwatch 里不参与匹配）；自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）；同时保留事件 ID 条件：两条路径都会判定；字段条件已保留：evtx 场景按字段精确匹配，不靠文本近似",
+                      "logsource":  "windows/application",
+                      "eventIds":  [
+                                       11708
+                                   ],
+                      "fieldConditions":  [
+                                              {
+                                                  "field":  "Data",
+                                                  "mod":  "re",
+                                                  "values":  [
+                                                                 "Installation failed.*1603"
+                                                             ]
+                                              }
+                                          ],
+                      "verify":  "安装失败后打开 %TEMP% 找最新的 MSI*.log，搜「Return value 3」；它上面几行会写明 1603 的具体原因。",
+                      "verifyStatus":  "verified"
+                  },
+                  {
+                      "id":  "sigma-3c333333",
+                      "title":  "Service Failed To Start",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-service-fail.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-service-fail.yml",
+                      "sigmaId":  "3c333333-3333-4333-8333-333333333333",
+                      "pat":  "(?sm)service",
+                      "why":  "某个服务在开机时超时没起来 —— 看服务名：第三方软件的服务就更新/重装它，系统服务则查依赖组件。",
+                      "do":  "可疑：建议检查上下文，多为策略或配置问题",
+                      "ref":  "sigma:3c333333-3333-4333-8333-333333333333",
+                      "level":  "medium",
+                      "note":  "字段「param1」→ 已展平为文本匹配（原字段名在 errwatch 里不参与匹配）；等值/contains 在文本匹配下按「包含」处理；自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）；同时保留事件 ID 条件：两条路径都会判定；字段条件已保留：evtx 场景按字段精确匹配，不靠文本近似",
+                      "logsource":  "windows/system",
+                      "eventIds":  [
+                                       7000
+                                   ],
+                      "fieldConditions":  [
+                                              {
+                                                  "field":  "param1",
+                                                  "mod":  "contains",
+                                                  "values":  [
+                                                                 "service"
+                                                             ]
+                                              }
+                                          ],
+                      "verify":  "看事件 7000 / 7001 详情里的服务名；在 services.msc 找到该服务看状态与启动类型；第三方软件的服务 → 更新/重装它。",
+                      "verifyStatus":  "verified"
+                  },
+                  {
+                      "id":  "sigma-9c999999",
+                      "title":  "External Disk Drive Recognised",
+                      "author":  "errwatch sample",
+                      "uri":  "tools/sigma-samples/sample-usb.yml",
+                      "license":  "MIT",
+                      "source":  "errwatch",
+                      "origin":  "original",
+                      "originSource":  "tools/sigma-samples/sample-usb.yml",
+                      "sigmaId":  "9c999999-9999-4999-8999-999999999999",
+                      "pat":  "(?sm)DiskDrive",
+                      "why":  "系统识别到了新的外接磁盘 —— 一般不是故障，只是插过 U 盘/移动硬盘的记录，可忽略。",
+                      "do":  "信息性：记录备查即可",
+                      "ref":  "sigma:9c999999-9999-4999-8999-999999999999",
+                      "level":  "low",
+                      "note":  "字段「ClassName」→ 已展平为文本匹配（原字段名在 errwatch 里不参与匹配）；等值/contains 在文本匹配下按「包含」处理；自编 Sigma 格式样例（非 SigmaHQ 规则；字段匹配 → 文本匹配，属近似）；同时保留事件 ID 条件：两条路径都会判定；字段条件已保留：evtx 场景按字段精确匹配，不靠文本近似",
+                      "logsource":  "windows/security",
+                      "eventIds":  [
+                                       6416
+                                   ],
+                      "fieldConditions":  [
+                                              {
+                                                  "field":  "ClassName",
+                                                  "mod":  "",
+                                                  "values":  [
+                                                                 "DiskDrive"
+                                                             ]
+                                              }
+                                          ],
+                      "verify":  "打开「设备管理器 → 磁盘驱动器」或「磁盘管理」看是否多出这个盘；拔掉它后事件不再出现 → 确认只是识别记录。",
+                      "verifyStatus":  "verified"
+                  }
+              ]
+}

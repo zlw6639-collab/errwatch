@@ -1,0 +1,67 @@
+# .gitignore — errwatch
+#
+# ★ 生成方式（2026-10-26）：这份名单**不是手写的**，而是按 tools\pack-filter.ps1 的
+#   $EwStateFileNames / $EwPackExcludeGlobs / $EwPackExcludePrefixes 逐条导出生成。
+#   为什么不能手写：离线清单一漏，就会把本机运行数据推进公开仓库 ——
+#   项目已经踩过三次（审计 P2-2 的 tray-fallback / _gate-b12，以及 2026-10-26 的 ui.pid）。
+#
+# ⚠ 改动本文件后必须跑 tests\test-pack-hygiene.ps1 —— 有守卫盯着
+#   「.gitignore 是否覆盖了 pack-filter 里的每一个状态文件名」。
+
+# ── 运行期状态 / 本机记录（与 pack-filter 的 EwStateFileNames 一一对应）──
+diagnosis-traces.jsonl
+env-last.json
+feedback.jsonl
+fix-audit.jsonl
+history.jsonl
+last-check.json
+last-run.json
+last-success.json
+opportunity.json
+sentinel-coverage.json
+sentinel-dumplink.jsonl
+sentinel-error.log
+sentinel-events.jsonl
+sentinel-last.json
+sentinel-pending.json
+sentinel-retention.jsonl
+sentinel-status.json
+settings.json
+tray-acks.jsonl
+tray-error.log
+tray-exit.json
+tray-exit.jsonl
+tray-fallback.jsonl
+ui-crash.log
+ui-err.log
+ui-ignored.json
+ui-out.log
+ui.pid
+# tests\run.ps1 每次跑都会重写它（不是测试夹具；夹具是 tests\cases.jsonl）
+tests/history.jsonl
+
+# ── 运行产物（与 pack-filter 的 EwPackExcludeGlobs 对应）──
+_gate-*.txt
+*.bak
+*.bak-*
+*.bak[0-9]
+*.corrupt-*
+*.sbom.json
+*.tmp
+*.verify.json
+*analysis*.md
+一键检查-*.cmd
+report-*.md
+unknown-chain-*.json
+
+# ── 目录（与 pack-filter 的 EwPackExcludePrefixes 对应）──
+_prune-Backup/
+_tmp/
+_dist/
+.git/
+
+# ── 编辑器与系统 ──
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/

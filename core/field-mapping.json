@@ -1,0 +1,32 @@
+{
+  "schema": "errwatch-field-mapping",
+  "schemaVersion": 1,
+  "purpose": "把 Sigma 规则里的字段名映射到 Windows 事件 XML 的真实位置。思路借自 Chainsaw 的 --mapping：规则保持原样，另配一张映射表 —— 这样就不必把字段条件展平成文本正则（那种做法会丢掉字段语义）。",
+  "systemFields": {
+    "EventID": "Event.System.EventID",
+    "Provider_Name": "Event.System.Provider.Name",
+    "Channel": "Event.System.Channel",
+    "Computer": "Event.System.Computer",
+    "Level": "Event.System.Level",
+    "Task": "Event.System.Task",
+    "Opcode": "Event.System.Opcode",
+    "Keywords": "Event.System.Keywords",
+    "Security_UserID": "Event.System.Security.UserID"
+  },
+  "aliases": {
+    "Provider": "Provider_Name",
+    "ProviderName": "Provider_Name",
+    "SourceName": "Provider_Name",
+    "ProcessName": "Image",
+    "ParentProcessName": "ParentImage",
+    "SourceImage": "Image",
+    "Destination": "DestinationIp",
+    "TargetUserName": "TargetUserName"
+  },
+  "notes": [
+    "System 段：EventID / Provider / Channel / Computer / Level 必须从 System 取，它们不在 EventData 里。",
+    "EventData 段：字段名与 Sigma 里的写法基本一致（Sysmon 与 Windows 审计事件都这样），所以直接按 Data[@Name=字段] 取。",
+    "UserData 段：少数事件（如 Windows Update 相关）把数据放在 UserData 下，本映射暂不解析 —— 这类规则会退回事件 ID + 文本匹配。",
+    "这一点是 2026-10-22 实测的教训：把字段条件展平成文本正则后，'param1 contains service' 会在整条消息里找 'service'，导致 1001 事件被 7000 的规则命中 451 次。字段级匹配才是正解。"
+  ]
+}

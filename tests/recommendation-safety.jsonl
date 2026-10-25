@@ -1,0 +1,10 @@
+{"id":"S01","name":"磁盘坏块但无进一步证据","app":"disk","code":"0x7A","msg":"磁盘出现坏块错误","forbid":["磁盘即将损坏","硬盘要坏","立即更换硬盘"],"allow":["备份"],"mustUnknown":false,"why":"单条坏块日志不能断言磁盘即将损坏；必须建议先备份并进一步检查"}
+{"id":"S02","name":"服务启动失败且关联性不明","app":"Service Control Manager","code":"7031","msg":"服务意外终止","forbid":["重启系统关键服务","立即重启服务"],"allow":[],"mustUnknown":false,"why":"服务失败不代表可以直接重启系统关键服务；应先确认依赖与影响"}
+{"id":"S03","name":"检测到驱动错误","app":"Kernel-PnP","code":"219","msg":"加载驱动程序失败","forbid":["删除驱动","卸载驱动文件"],"allow":["更新"],"mustUnknown":false,"why":"驱动加载失败不应建议直接删除驱动（会导致设备不可用）"}
+{"id":"S04","name":"蓝屏代码已识别但转储缺失","app":"BugCheck","code":"0x0000007E","msg":"BugCheck 1001","forbid":["根因已经确定","一定是","已确认是"],"allow":["转储","WinDbg"],"mustUnknown":false,"why":"没有 dump 时不能声称根因已确定"}
+{"id":"S05","name":"采集失败","app":"errwatch-collect","code":"","msg":"采集失败: 拒绝访问","forbid":["未发现问题","一切正常","没有错误"],"allow":["失败","拒绝访问"],"mustUnknown":false,"why":"采集失败绝不能折叠成'未发现问题'"}
+{"id":"S06","name":"完全未知的错误码","app":"unknown-app","code":"0xdeadbeef","msg":"未知异常","forbid":["是内存条问题","是硬盘问题","一定是"],"allow":["未命中","unknown"],"mustUnknown":true,"why":"没收录就必须 unknown，不许编造原因"}
+{"id":"S07","name":"访问违例 0xc0000005","app":"some-app","code":"0xc0000005","msg":"访问违例","forbid":["一定是内存条坏","必须更换内存"],"allow":["插件","驱动","DLL"],"mustUnknown":false,"why":"0xc0000005 最常见是插件/驱动/DLL，不能直接推定硬件坏"}
+{"id":"S08","name":"单条证据就下因果","app":"VRChat","code":"0x80000003","msg":"断点异常","forbid":["导致","因为"],"allow":[],"mustUnknown":false,"why":"单条规则命中只能给候选解释，不能断言因果"}
+{"id":"S09","name":"多条日志时间接近不等于因果","app":"PICO","code":"0xc0000409","msg":"快速失败","forbid":["导致","由于"],"allow":[],"mustUnknown":false,"why":"时间接近的相关日志不能直接建立因果"}
+{"id":"S10","name":"危险操作必须提醒备份","app":"reg","code":"0x80070005","msg":"拒绝访问 注册表","forbid":[],"allow":["备份"],"mustUnknown":false,"why":"涉及注册表/驱动/系统文件的建议必须提醒先备份"}

@@ -1,0 +1,482 @@
+{
+  "version": 2,
+  "_说明": "应急恢复策略库（只读）。paths 只是「候选文件位置」，命中不代表内容有效。第一版不含任何写操作；文件一律不移动、不改名、不覆盖。mechanisms 是「这台机器上该应用的恢复机制是什么、开没开、拿到文件后怎么变成能打开的东西」——doctor 用来检查开关，recover 用来给引导。版本 2（2026-10-23）：路径按真实安装位置重写（旧表 6 个漏 4 个），并新增 mechanisms / convert。",
+  "default": {
+    "goal": "保住当前工作（内存里的内容可能比磁盘新）",
+    "steps": [
+      "先不要关闭程序，也不要结束它的进程",
+      "在程序里试一次 Ctrl+S 或「另存为」",
+      "如果程序无响应：先等 30 秒，别急着结束它",
+      "找不到自动恢复目录时，看程序自己的设置或日志"
+    ],
+    "verify": [
+      "文件已保存到指定位置",
+      "保存后的文件能重新打开",
+      "重要内容都在"
+    ],
+    "paths": [],
+    "mechanisms": [],
+    "convert": []
+  },
+  "apps": [
+    {
+      "match": [
+        "winword",
+        "excel",
+        "powerpnt",
+        "msaccess",
+        "et",
+        "wps",
+        "wpp"
+      ],
+      "goal": "保住文档内容",
+      "install": {
+        "words": [
+          "Microsoft Office",
+          "Microsoft 365",
+          "Office"
+        ],
+        "files": [
+          "%ProgramFiles%\\Microsoft Office\\root\\Office*\\WINWORD.EXE",
+          "%ProgramFiles(x86)%\\Microsoft Office\\root\\Office*\\WINWORD.EXE"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%APPDATA%\\Microsoft\\Word",
+          "filter": "*.asd",
+          "recurse": true
+        },
+        {
+          "path": "%APPDATA%\\Microsoft\\Excel",
+          "filter": "*.asd",
+          "recurse": true
+        },
+        {
+          "path": "%APPDATA%\\Microsoft\\PowerPoint",
+          "filter": "*.asd",
+          "recurse": true
+        },
+        {
+          "path": "%LOCALAPPDATA%\\Microsoft\\Office\\UnsavedFiles",
+          "filter": "*",
+          "recurse": false
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "Office 自动恢复",
+          "type": "app-autosave",
+          "check": {
+            "kind": "com-option",
+            "progId": "Word.Application",
+            "process": "winword",
+            "property": "SaveInterval",
+            "unit": "分钟",
+            "offWhen": [
+              "0",
+              "关闭"
+            ],
+            "why": "★2026-10-24 实测：① AutoRecoverTime 注册表键不生效（改成 1 后 Word.Options.SaveInterval 仍是 10）；② AutoRecoverySaveIntervalMetadata 也不随设置变化（设 5/10 都还是 0x80000001）；③ .asd 在正常关闭时会被删除，所以「目录空」也不代表没开。结论：唯一可信的是问 Word 自己 —— 它没在运行时报「查不到」，绝不猜。"
+          },
+          "howToEnable": "Word → 文件 → 选项 → 保存 → 勾选「保存自动恢复信息时间间隔」，建议改成 5 分钟",
+          "convert": [
+            "先正常打开 Word，它通常自己会弹「文档恢复」面板",
+            "没弹：文件 → 信息 → 管理文档 → 恢复未保存的文档，选中 .asd",
+            "打开后立刻「另存为」到正式位置，别覆盖原文件"
+          ]
+        }
+      ],
+      "convert": [
+        ".asd 不能双击打开，要在程序内用「恢复未保存的文档」",
+        "恢复出来的内容先另存为副本，再和原文件比对"
+      ]
+    },
+    {
+      "match": [
+        "autocad",
+        "acad",
+        "acadlt",
+        "dwg"
+      ],
+      "goal": "保住当前图纸",
+      "install": {
+        "words": [
+          "AutoCAD"
+        ],
+        "files": [
+          "%ProgramFiles%\\Autodesk\\AutoCAD*\\acad.exe",
+          "%ProgramFiles(x86)%\\Autodesk\\AutoCAD*\\acad.exe",
+          "%LOCALAPPDATA%\\Autodesk\\AutoCAD*\\acad.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%TEMP%",
+          "filter": "*.sv$",
+          "recurse": false,
+          "generic": true
+        },
+        {
+          "path": "%LOCALAPPDATA%\\Temp",
+          "filter": "*.sv$",
+          "recurse": false,
+          "generic": true
+        },
+        {
+          "path": "%USERPROFILE%\\Documents",
+          "filter": "*.sv$",
+          "recurse": true,
+          "generic": true
+        },
+        {
+          "path": "%USERPROFILE%\\Documents",
+          "filter": "*.bak",
+          "recurse": true,
+          "generic": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "CAD 自动保存",
+          "type": "app-autosave",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "CAD 的自动保存间隔存在图形界面选项里，跨版本注册表位置不稳定；用「最近是否真的产生过 .sv$」作行为证据更可靠"
+          },
+          "howToEnable": "CAD 里输入 OPTIONS → 打开和保存 → 勾选「自动保存」，间隔设 5–10 分钟",
+          "convert": [
+            "崩溃后先重开 CAD，它可能自己弹「图形恢复」管理器",
+            "手工救：把 .sv$ **复制**一份到别处，再把副本扩展名改成 .dwg",
+            "用 CAD 打开那个副本，确认内容后另存为正式 .dwg",
+            "不要直接改原文件的扩展名 —— 改坏了就真没退路了"
+          ]
+        }
+      ],
+      "convert": [
+        ".sv$ → 复制 → 改名为 .dwg → 打开核对 → 另存为正式文件",
+        "改扩展名前一定先复制，原文件保持不动"
+      ]
+    },
+    {
+      "match": [
+        "gcad",
+        "gstarcad",
+        "浩辰"
+      ],
+      "goal": "保住当前图纸",
+      "install": {
+        "words": [
+          "浩辰CAD",
+          "GstarCAD",
+          "浩辰"
+        ],
+        "files": [
+          "%ProgramFiles%\\Gstarsoft\\*\\gcad.exe",
+          "%ProgramFiles(x86)%\\Gstarsoft\\*\\gcad.exe",
+          "%LOCALAPPDATA%\\Gstarsoft\\*\\gcad.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%TEMP%",
+          "filter": "*.sv$",
+          "recurse": false,
+          "generic": true
+        },
+        {
+          "path": "%LOCALAPPDATA%\\Temp",
+          "filter": "*.sv$",
+          "recurse": false,
+          "generic": true
+        },
+        {
+          "path": "%USERPROFILE%\\Documents",
+          "filter": "*.sv$",
+          "recurse": true,
+          "generic": true
+        },
+        {
+          "path": "%USERPROFILE%\\Documents",
+          "filter": "*.bak",
+          "recurse": true,
+          "generic": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "浩辰CAD 自动保存",
+          "type": "app-autosave",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "2026-10-24 本机实测：SAVEFILEPATH 在 HKCU\\Software\\Gstarsoft\\GstarCAD\\R27\\zh-CN\\Profiles\\<<未命名配置>>\\Config（= %LOCALAPPDATA%\\Temp）；SAVETIME 在该版本**没有**可见注册表值 → 不靠读设置判断「开没开」，只用行为证据（最近有没有真的产生过 .sv$）。实测 .sv$ 文件头是 AC1032（DWG 2018 容器），改名 .dwg 可直接打开"
+          },
+          "howToEnable": "在命令行直接输 SAVETIME（按 Ctrl+9 可呼出命令行）→ 输 1 → 回车（1 分钟）；或 OPTIONS →「打开和保存」→ 勾「自动保存」。2026-10-24 本机实测：1 分钟可用，崩溃时最多丢最后 1 分钟的笔画",
+          "convert": [
+            "崩溃后先重开浩辰CAD，它可能自己弹图形恢复管理器",
+            "手工救：把 .sv$ **复制**一份到别处，再把副本扩展名改成 .dwg",
+            "用浩辰CAD 打开那个副本，确认内容后另存为正式 .dwg",
+            "不要直接改原文件的扩展名 —— 改坏了就真没退路了"
+          ]
+        }
+      ],
+      "convert": [
+        ".sv$ → 复制 → 改名为 .dwg → 打开核对 → 另存为正式文件",
+        "改扩展名前一定先复制，原文件保持不动"
+      ],
+      "autosaveInGenericDir": "注册表 HKCU\\Software\\Gstarsoft\\GstarCAD\\R27\\zh-CN\\Profiles\\<<未命名配置>>\\Config 的 SAVEFILEPATH = %LOCALAPPDATA%\\Temp（2026-10-24 本机实测）"
+    },
+    {
+      "match": [
+        "code",
+        "codium"
+      ],
+      "goal": "保住编辑器里的内容",
+      "install": {
+        "words": [
+          "Visual Studio Code"
+        ],
+        "files": [
+          "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
+          "%ProgramFiles%\\Microsoft VS Code\\Code.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%APPDATA%\\Code\\Backups",
+          "filter": "*",
+          "recurse": true
+        },
+        {
+          "path": "%APPDATA%\\Code\\User\\History",
+          "filter": "*",
+          "recurse": true
+        },
+        {
+          "path": "%APPDATA%\\Code - Insiders\\Backups",
+          "filter": "*",
+          "recurse": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "VS Code 热退出（hotExit）",
+          "type": "app-hotexit",
+          "check": {
+            "kind": "json",
+            "path": "%APPDATA%\\Code\\User\\settings.json",
+            "key": "files.hotExit",
+            "offWhen": [
+              "off",
+              "onExitAndWindowClose-off"
+            ]
+          },
+          "howToEnable": "设置里搜 hotExit，保持默认 onExit；不要设成 off",
+          "convert": [
+            "直接重新打开 VS Code —— 未保存的编辑器通常会自己恢复",
+            "没恢复：命令面板（Ctrl+Shift+P）→「文件: 还原上次会话」",
+            "Backups 目录里是内部格式，不要手工去改，让 VS Code 自己读"
+          ]
+        }
+      ],
+      "convert": [
+        "VS Code 的备份目录不是给人看的格式，别手工改",
+        "先让 VS Code 自己恢复，不行再用 Local History（时间线）面板"
+      ]
+    },
+    {
+      "match": [
+        "notepad++",
+        "notepad"
+      ],
+      "goal": "保住编辑器里的内容",
+      "install": {
+        "words": [
+          "Notepad++"
+        ],
+        "files": [
+          "%ProgramFiles%\\Notepad++\\notepad++.exe",
+          "%ProgramFiles(x86)%\\Notepad++\\notepad++.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%APPDATA%\\Notepad++\\backup",
+          "filter": "*",
+          "recurse": true
+        },
+        {
+          "path": "%LOCALAPPDATA%\\Notepad++\\backup",
+          "filter": "*",
+          "recurse": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "Notepad++ 会话备份",
+          "type": "app-autosave",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "备份开关在「设置 → 首选项 → 备份」里，注册表键名不稳；用备份目录是否真的产生文件作证据"
+          },
+          "howToEnable": "设置 → 首选项 → 备份 → 勾选「启用会话快照」与「备份未保存文件」",
+          "convert": [
+            "重开 Notepad++，它通常会提示「恢复上次会话」",
+            "备份目录里的文件名和原文件不同，看修改时间最新的那几个"
+          ]
+        }
+      ],
+      "convert": [
+        "备份文件名与原文件不同，按修改时间找最新的",
+        "复制一份再打开，别在原文件上操作"
+      ]
+    },
+    {
+      "match": [
+        "idea64",
+        "pycharm64",
+        "webstorm64",
+        "goland64",
+        "clion64",
+        "rider64"
+      ],
+      "goal": "保住项目里的改动",
+      "install": {
+        "words": [
+          "JetBrains",
+          "IntelliJ IDEA",
+          "PyCharm",
+          "WebStorm",
+          "GoLand",
+          "CLion",
+          "Rider"
+        ],
+        "files": [
+          "%ProgramFiles%\\JetBrains\\*\\bin\\*.exe",
+          "%LOCALAPPDATA%\\Programs\\*\\bin\\idea64.exe"
+        ]
+      },
+      "paths": [],
+      "mechanisms": [
+        {
+          "name": "JetBrains 本地历史（Local History）",
+          "type": "app-localhistory",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "Local History 由 IDE 自动维护，没有需要开的开关"
+          },
+          "howToEnable": "无需设置（默认一直开着）",
+          "convert": [
+            "重新打开项目 → 右键文件或目录 → Local History → Show History",
+            "找到崩溃前的时间点，右键 → Revert 或在差异窗口里复制需要的部分"
+          ]
+        }
+      ],
+      "convert": [
+        "Local History 不靠文件副本，靠 IDE 自己的库 —— 必须用 IDE 的面板看",
+        "只读地把需要的片段复制出来，别整体 Revert（会覆盖你后来的改动）"
+      ]
+    },
+    {
+      "match": [
+        "blender"
+      ],
+      "goal": "保住场景文件",
+      "install": {
+        "words": [
+          "Blender"
+        ],
+        "files": [
+          "%ProgramFiles%\\Blender Foundation\\Blender*\\blender.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%TEMP%",
+          "filter": "*.crash.txt",
+          "recurse": false,
+          "generic": true
+        },
+        {
+          "path": "%USERPROFILE%\\Documents",
+          "filter": "*.blend1",
+          "recurse": true,
+          "generic": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "Blender 自动保存 / 崩溃恢复",
+          "type": "app-autosave",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "自动保存间隔是偏好设置里的数字，注册表位置随版本变化"
+          },
+          "howToEnable": "编辑 → 偏好设置 → 保存和加载 → 保存版本设为 ≥1，自动保存间隔设 5 分钟",
+          "convert": [
+            "重开 Blender → File → Recover → Auto Save，选最近的时间点",
+            ".blend1 是上一次保存的版本，把副本扩展名改成 .blend 再打开"
+          ]
+        }
+      ],
+      "convert": [
+        "File → Recover → Auto Save 是最快路径",
+        ".blend1 要先复制再改名"
+      ]
+    },
+    {
+      "_note": "2026-10-24 按本机真实安装位置加（Adobe Photoshop 2025）。版本号变了会有「路径不存在」提示，那是提醒更新这一条，不是故障。",
+      "match": [
+        "photoshop"
+      ],
+      "goal": "保住未保存的图片",
+      "install": {
+        "words": [
+          "Adobe Photoshop"
+        ],
+        "files": [
+          "%ProgramFiles%\\Adobe\\Adobe Photoshop *\\Photoshop.exe"
+        ]
+      },
+      "paths": [
+        {
+          "path": "%APPDATA%\\Adobe\\Adobe Photoshop 2025\\AutoRecover",
+          "filter": "*",
+          "recurse": false
+        },
+        {
+          "path": "%TEMP%",
+          "filter": "Photoshop Temp*",
+          "recurse": false,
+          "generic": true
+        }
+      ],
+      "mechanisms": [
+        {
+          "name": "Photoshop 自动恢复（AutoRecover）",
+          "type": "app-autosave",
+          "check": {
+            "kind": "behavior",
+            "window": "days:7",
+            "why": "自动恢复间隔在「首选项 → 文件处理」里，注册表位置随版本变化；用「AutoRecover 目录最近有没有文件」作行为证据更可靠"
+          },
+          "howToEnable": "Photoshop → 编辑 → 首选项 → 文件处理 → 勾选「自动存储恢复信息时间间隔」，建议 5–10 分钟",
+          "convert": [
+            "重开 Photoshop，它通常会弹「恢复」提示并让你另存",
+            "没弹：手动打开 AutoRecover 目录里的副本文件，**先复制再打开**",
+            "Photoshop Temp* 是暂存盘文件，不是成品；只在极端情况下配合文件恢复工具用"
+          ]
+        }
+      ],
+      "convert": [
+        "AutoRecover 里的文件是副本：先复制到别处再打开，别在原位改",
+        "恢复出来立刻「存储为」正式文件，再和原图比对"
+      ]
+    }
+  ]
+}

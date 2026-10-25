@@ -1,0 +1,28 @@
+{"id":"c01","app":"CodexSandboxService.OpenAI.Codex","code":"","msg":"","expect_hit":true,"expect_app":"Codex Sandbox Service","note":"服务令牌警告，non-fatal"}
+{"id":"c02","app":"CodexSandboxService.OpenAI.Codex","code":"","msg":"","expect_hit":true,"expect_app":"Codex Sandbox Service","note":"同上"}
+{"id":"c03","app":"ps_service_launcher.exe","code":"0xc0000409","msg":"出错应用程序名称： ps_service_launcher.exe","expect_hit":true,"expect_app":null,"note":"通用快速失败"}
+{"id":"c04","app":"ps_service_launcher.exe","code":"0xc0000409","msg":"","expect_hit":true,"expect_app":null,"note":"同上"}
+{"id":"c05","app":"ps_service_launcher.exe","code":"0xc0000409","msg":"","expect_hit":true,"expect_app":null,"note":"同上"}
+{"id":"c06","app":"VRChat.exe","code":"0xc0000005","msg":"出错模块：UnityPlayer.dll","expect_hit":true,"expect_app":"VRChat / Unity","note":"VRC 专属：MOD/驱动"}
+{"id":"c07","app":"VRChat.exe","code":"0xc0000005","msg":"","expect_hit":true,"expect_app":"VRChat / Unity","note":"同上"}
+{"id":"c08","app":"vrwebhelper.exe","code":"0xe0000008","msg":"","expect_hit":true,"expect_app":"VRChat / Unity","note":"VRC 附属进程"}
+{"id":"c09","app":"app_check.exe","code":"0xc0000409","msg":"","expect_hit":true,"expect_app":null,"note":"通用快速失败"}
+{"id":"c10","app":"VRChat.exe","code":"0x80000003","msg":"","expect_hit":true,"expect_app":"VRChat / Unity","note":"VRC 断点"}
+{"id":"c11","app":"vrwebhelper.exe","code":"0xe0000008","msg":"","expect_hit":true,"expect_app":"VRChat / Unity","note":"同上"}
+{"id":"c12","app":"Agents Anywhere.exe","code":"0x80000003","msg":"出错模块：Agents Anywhere.exe","expect_hit":true,"expect_app":"Agents Anywhere（桌面壳 / connector）","note":"AA 桌面壳崩溃"}
+{"id":"r01","app":"CodexSandboxService.OpenAI.Codex","code":"","msg":"","expect_hit":true,"expect_app":"Codex Sandbox Service","note":"真实样本(2026-10-22)：只有来源名、无错误码无消息 —— 弱证据类，靠 apps.json 档案判定，措辞已限定为「多为…」"}
+{"id":"r02","app":"ps_service_launcher.exe","code":"0xc0000409","msg":"出错应用程序名称： ps_service_launcher.exe，版本： 0.0.0.0，时间戳： 0x68a7dd88","expect_hit":true,"expect_app":null,"note":"真实样本：PS 服务启动器反复快速失败（0xc0000409 码义准确）"}
+{"id":"r03","app":"VRChat.exe","code":"0xc0000005","msg":"出错应用程序名称： VRChat.exe，版本： 6000.0.67.6863，时间戳： 0x6ac557e6；出错模块名称： UnityPlayer.dll","expect_hit":true,"expect_app":"VRChat / Unity","note":"真实样本：VRC 访问违例，归属 VRC 专属规则（比通用结论更具体）"}
+{"id":"r04","app":"vrwebhelper.exe","code":"0xe0000008","msg":"出错应用程序名称： vrwebhelper.exe，版本： 1.1.1.0，时间戳： 0x6aa992aa；出错模块名称： KERNELBASE.dll","expect_hit":true,"expect_app":"VRChat / Unity","note":"真实样本：VRC 附属进程自定义失败码（措辞待精确：该码段属厂商自定义区）"}
+{"id":"r05","app":"VRChat.exe","code":"0x80000003","msg":"出错应用程序名称： VRChat.exe，版本： 6000.0.67.6863，时间戳： 0x6ac557e6","expect_hit":true,"expect_app":"VRChat / Unity","note":"真实样本：VRC 断点异常"}
+{"id":"r06","app":"Agents Anywhere.exe","code":"0x80000003","msg":"出错应用程序名称： Agents Anywhere.exe，版本： 2.0.3.0，时间戳： 0x69fa39cd；出错模块名称： Agents Anywhere.exe","expect_hit":true,"expect_app":"Agents Anywhere（桌面壳 / connector）","note":"真实样本：AA 桌面壳 2.0.3 启动即崩（有实测 ref）"}
+{"id":"r07","app":"app_check.exe","code":"0xc0000409","msg":"出错应用程序名称： app_check.exe，版本： 0.0.0.0，时间戳： 0x658e6056","expect_hit":true,"expect_app":null,"note":"真实样本：同类快速失败，无软件档案 → 走通用规则"}
+{"id":"n01","app":"some_random_app.exe","code":"0x12345678","msg":"完全没见过的错误","expect_hit":false,"expect_app":null,"note":"负样本：应该未命中"}
+{"id":"n02","app":"unknown.exe","code":"","msg":"一个普通的文本消息","expect_hit":false,"expect_app":null,"note":"负样本：无特征"}
+{"id":"y01","app":"backup_tool.exe","code":"","msg":"日志里引用了一句 'Access is denied' 作为示例文本","expect_hit":false,"expect_app":null,"note":"阴样本：文本含关键词但不是真错误"}
+{"id":"y02","app":"docs_generator.exe","code":"","msg":"文档正文提到 ENOENT 是 Node 的常见错误","expect_hit":false,"expect_app":null,"note":"阴样本：ENOENT 出现在说明文字里"}
+{"id":"y03","app":"normal_app.exe","code":"","msg":"一切正常，启动完成","expect_hit":false,"expect_app":null,"note":"阴样本：无错误"}
+{"id":"x01","app":"conflict_test.exe","code":"0xc0000005","msg":"ENOENT: no such file","expect_hit":true,"expect_app":null,"note":"冲突样本：0xc0000005 与 ENOENT:\\s 同时命中两条通用规则，结论取决于规则顺序（冲突计数应≥2，这是隐患不是成绩）"}
+{"id":"x02","app":"noise_app.exe","code":"","msg":"Access is denied 出现在行首","expect_hit":true,"expect_app":null,"note":"锚点样本：^Access is denied 需要行首命中；msg 作为独立行时必须命中"}
+{"id":"u01","app":"brand_new_app.exe","code":"0xdeadbeef","msg":"一个从未见过的错误组合","expect_hit":false,"expect_app":null,"note":"未知样本：不应强行解释"}
+{"id":"u02","app":"mystery_svc","code":"0x1234abcd","msg":"","expect_hit":false,"expect_app":null,"note":"未知样本：无匹配规则"}

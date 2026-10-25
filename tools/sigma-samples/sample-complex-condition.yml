@@ -1,0 +1,20 @@
+title: Complex Condition Should Be Skipped
+id: 7a777777-7777-4777-8777-777777777777
+status: test
+description: This rule uses an or-combination of two selections, which errwatch cannot express reliably.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: system
+detection:
+    selection_a:
+        EventID: 41
+    selection_b:
+        EventID: 6008
+    filter:
+        Message|contains: 'planned'
+    condition: (selection_a or selection_b) and not filter
+falsepositives:
+    - Unknown
+level: high

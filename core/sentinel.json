@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "_说明": "故障哨兵监视目标。match 是 exe 名（不含扩展名，大小写不敏感）。退出 ≠ 崩溃：退出只触发调查，最终判定看事件日志。gapAfterSeconds：两次检查间隔超过它就在 coverage 里记「监视有缺口」——常驻 poll=1 秒时不会触发；机器睡眠 / 进程被挂起 / 计划任务每 2 分钟拉一次都会触发。宁可说这段没看到，也不假装看到了。",
+  "pollSeconds": 1,
+  "gapAfterSeconds": 180,
+  "watch": [
+    {
+      "match": [
+        "acad",
+        "autocad"
+      ],
+      "note": "CAD（AutoCAD 完整版）"
+    },
+    {
+      "match": [
+        "gcad",
+        "gstarcad"
+      ],
+      "note": "浩辰CAD（GstarCAD，国产 DWG CAD；与 AutoCAD 不同产品，不互为兄弟）"
+    },
+    {
+      "match": [
+        "acadlt"
+      ],
+      "note": "CAD（AutoCAD LT）"
+    },
+    {
+      "match": [
+        "devenv"
+      ],
+      "note": "Visual Studio"
+    },
+    {
+      "match": [
+        "code"
+      ],
+      "note": "VS Code"
+    },
+    {
+      "match": [
+        "idea64"
+      ],
+      "note": "idea64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "pycharm64"
+      ],
+      "note": "pycharm64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "webstorm64"
+      ],
+      "note": "webstorm64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "goland64"
+      ],
+      "note": "goland64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "clion64"
+      ],
+      "note": "clion64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "rider64"
+      ],
+      "note": "rider64（JetBrains 单个产品；不与其它 IDE 互为兄弟）"
+    },
+    {
+      "match": [
+        "notepad++"
+      ],
+      "note": "Notepad++"
+    },
+    {
+      "match": [
+        "ps_service_launcher",
+        "ps_server"
+      ],
+      "note": "PICO 串流（启动器+后台）"
+    },
+    {
+      "match": [
+        "vrchat"
+      ],
+      "note": "VRChat"
+    },
+    {
+      "match": [
+        "winword"
+      ],
+      "note": "Word"
+    },
+    {
+      "match": [
+        "excel"
+      ],
+      "note": "Excel"
+    },
+    {
+      "match": [
+        "powerpnt"
+      ],
+      "note": "PowerPoint"
+    },
+    {
+      "match": [
+        "DSH Desktop"
+      ],
+      "note": "DSH（2026-10-24 修正：原来写的 dsh / electron / electron-shell 在本机一个都匹配不到 —— 实测 Get-Process 的计数分别是 0 / 0 / 0。DSH 实际 exe 名是「DSH Desktop.exe」，本机有 12 个同名进程但只有 1 个带窗口，所以过去它只是被「有窗口」那条动态规则顺带看着，无窗口子进程崩了抓不到）"
+    }
+  ]
+}

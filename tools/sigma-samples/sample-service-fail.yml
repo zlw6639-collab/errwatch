@@ -1,0 +1,17 @@
+title: Service Failed To Start
+id: 3c333333-3333-4333-8333-333333333333
+status: test
+description: A service did not start within the timeout during system startup.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        EventID: 7000
+        param1|contains: 'service'
+    condition: selection
+falsepositives:
+    - Third-party service disabled on purpose
+level: medium

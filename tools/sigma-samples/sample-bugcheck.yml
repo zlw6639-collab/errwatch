@@ -1,0 +1,19 @@
+title: Windows BugCheck (Blue Screen Recorded)
+id: 1a111111-1111-4111-8111-111111111111
+status: test
+description: Detects the System event that records a kernel bugcheck after a blue screen.
+references:
+    - https://learn.microsoft.com/en-us/windows/client-management/windows-stop-codes
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        EventID: 1001
+        Provider_Name: BugCheck
+    condition: selection
+falsepositives:
+    - Legitimate kernel debugging or driver testing
+level: critical

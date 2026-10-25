@@ -1,0 +1,17 @@
+title: External Disk Drive Recognised
+id: 9c999999-9999-4999-8999-999999999999
+status: test
+description: Detects a newly recognised external disk drive class device.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 6416
+        ClassName: "DiskDrive"
+    condition: selection
+falsepositives:
+    - Legitimate USB storage
+level: low

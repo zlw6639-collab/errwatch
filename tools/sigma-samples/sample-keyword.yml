@@ -1,0 +1,17 @@
+title: Kernel Power Loss Keywords
+id: 5e555555-5555-4555-8555-555555555555
+status: test
+description: Keyword based detection for power-loss related text in system logs.
+author: errwatch sample
+date: 2026-10-22
+logsource:
+    product: windows
+detection:
+    keywords:
+        - 'Kernel-Power'
+        - 'unexpected shutdown'
+        - 'did not shut down cleanly'
+    condition: keywords
+falsepositives:
+    - Unknown
+level: informational
