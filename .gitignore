@@ -65,3 +65,22 @@ Thumbs.db
 desktop.ini
 *.swp
 .vscode/
+
+# ── 开发过程记录（★ 手工维护，与 pack-filter 无关）──────────────────────
+# 2026-10-26 发布前决定：这 50 个文件**不进公开仓库**。
+# 理由（实测数据，不是感觉）：
+#   · 它们含主机名 WZL（13 个文件，audit-state-machine 里就有 170 处）
+#   · 含「我机器上正在跑什么」的快照（NEXT-SESSION L27：ps_service_launcher / PICO /
+#     DSH Desktop×10 / QQ / Twinkle Tray …）
+#   · 含本机安装路径（D:\cad\浩辰CAD 2027\senddmp.exe 等）
+#   · 含崩溃演练的真实实测数据
+# 它们对使用者没有价值（用户要的是工具和可审的代码），而泄漏不可逆 —— 推上去就能被
+# fork / 镜像 / 爬虫缓存，删了也不算真删。想公开随时能加回来，反过来撤不回。
+# 注意：文件**仍在磁盘上**，本地开发照常用，只是 git 不跟踪。
+HANDOFF.md
+ISSUES.md
+NEXT-SESSION.md
+tests/audit-*.md
+tests/design-*.md
+tests/discussion-*.md
+tests/drill-*.md
