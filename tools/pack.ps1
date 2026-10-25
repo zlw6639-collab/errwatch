@@ -58,7 +58,7 @@ if (Test-Path -LiteralPath $out) {
 # ★ 2026-10-24（外部审计 P2-2）：排除判据**全部搬到 tools\pack-filter.ps1**，
 #   与 errwatch-baseline.ps1 共用同一份名单 + 同一套白名单。
 #   原来这里和基线各写一份，两套判据必然漂移 —— 本轮就是这么把本机真实进程名
-#   （tray-fallback.jsonl 里的 QQ / 雷神加速器 / DSH Desktop）打进送审包的。
+#   （tray-fallback.jsonl 里的本机真实进程名）打进送审包的。
 $packFilter = Join-Path $Root 'tools\pack-filter.ps1'
 if (-not (Test-Path -LiteralPath $packFilter)) {
     Write-Host '[拒绝打包] 缺少 tools\pack-filter.ps1（排除判据的唯一实现，没有它就不能保证包内无本机数据）' -ForegroundColor Red
