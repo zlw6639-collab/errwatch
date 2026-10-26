@@ -64,20 +64,48 @@ if (-not (Get-Command Get-ErrwatchSettings -ErrorAction SilentlyContinue) -and (
 $fbCore = Join-Path $root 'core\fallback.ps1'
 if (Test-Path -LiteralPath $fbCore) { . $fbCore }
 
+# ── 引擎选择（2026-10-26，用户：「托盘点击进主页面不进，而且有大黑框」）──────
+# 原来「打开主界面」硬编码 System32 的 powershell.exe（5.1）。实测构建期：
+#   5.1 = 33.2 秒 / pwsh 7 = 13.6 秒  —— 用户点完十几秒没反应，以为没点上，
+#   于是再点一次；而第二次点击走的是「已打开 → 关闭」分支，把正在启动的窗口杀掉。
+#   这就是「点了不进」的全部成因。
+# 现在统一走 core\engine.ps1 的 Get-ErrwatchPsExe（先 PATH、再默认安装位置、最后 5.1）。
+$engineCore = Join-Path $root 'core\engine.ps1'
+if (Test-Path -LiteralPath $engineCore) { . $engineCore }
+
 $fallbackLog = Join-Path $stateDir 'tray-fallback.jsonl'
 $deadlineMinutes = 30
 $fallbackAction = 'notify-only'
 # ★ 2026-10-24（用户：「不能消失太快，但不能打扰」）：气泡显示时长可配（3–30 秒，默认 8）。
 #   8 秒是「四段话能读完」和「别挡右下角」之间的折中；全屏时本来就直接抑制，不弹。
 $notifySeconds = 8
+# ★ 2026-10-26（用户：「弹窗会不会太频繁了…已经弹了 5 个了」）：
+#   弹什么由设置决定（settings.json 的 notify.mode / notify.whitelist）。
+#   默认 important —— 只弹有实锤的（崩溃证据 / 反复崩溃），进程消失这类不弹气泡。
+#   边界：**只影响弹不弹气泡**，采集/记录/待处理/审计全部照旧。
+$notifyMode = 'important'
+$notifyWhitelist = @()
+$notifyOverdueEnabled = $true
 if (Get-Command Get-ErrwatchSettings -ErrorAction SilentlyContinue) {
     try {
         $stSet = Get-ErrwatchSettings -Root $root
         $deadlineMinutes = [int]$stSet.autorespond.deadlineMinutes
         $fallbackAction = [string]$stSet.autorespond.defaultAction
         if ($stSet.PSObject.Properties['notify'] -and $stSet.notify.seconds) { $notifySeconds = [int]$stSet.notify.seconds }
+        if ($stSet.PSObject.Properties['notify']) {
+            if ($stSet.notify.PSObject.Properties['mode'] -and $stSet.notify.mode) { $notifyMode = ([string]$stSet.notify.mode).ToLowerInvariant() }
+            if ($stSet.notify.PSObject.Properties['whitelist'] -and $null -ne $stSet.notify.whitelist) { $notifyWhitelist = @($stSet.notify.whitelist) }
+            # 超时提醒（2026-10-26 第二版）：开关 + 过期分钟数
+            if ($stSet.notify.PSObject.Properties['overdue'] -and $stSet.notify.overdue) {
+                if ($stSet.notify.overdue.PSObject.Properties['enabled']) { $notifyOverdueEnabled = [bool]$stSet.notify.overdue.enabled }
+                if ($stSet.notify.overdue.PSObject.Properties['minutes'] -and $stSet.notify.overdue.minutes) {
+                    $deadlineMinutes = [int]$stSet.notify.overdue.minutes
+                }
+            }
+        }
     } catch { }
 }
+if (@('all', 'important', 'whitelist', 'none') -notcontains $notifyMode) { $notifyMode = 'important' }
 # 再过一次白名单：配置被手工改成奇怪值也不会被放行（契约 §十一）
 if (Get-Command Test-ErrwatchFallbackActionAllowed -ErrorAction SilentlyContinue) {
     if (-not (Test-ErrwatchFallbackActionAllowed $fallbackAction)) { $fallbackAction = 'notify-only' }
@@ -804,7 +832,17 @@ $miExit.Add_Click({
 })
 $miOpen.Add_Click({
     # 状态化：已打开 → 关闭；没打开 → 打开（2026-10-24 用户要求）
+    # ★ 2026-10-26 重写（用户：「点击主页面不进，而且有大黑框」）—— 三个真问题一起修：
+    #   ① **大黑框**：Start-Process 会先给新进程分配一个控制台窗口，界面脚本跑到
+    #      `-HideConsole` 那句才把它藏起来。这一前一后之间，用户看到一个黑框。
+    #      改法：用 ProcessStartInfo + CreateNoWindow=true —— 控制台**从头就不创建**，
+    #      不是"创建了再藏"。黑框从根上不存在，也不再依赖界面自己隐藏。
+    #   ② **点了不进**：5.1 构建期 33 秒，用户以为没点上，再点 → 走上面的"关闭"分支
+    #      把正在启动的窗口杀掉。改法：优先 pwsh 7（13.6 秒）；并且点击后立刻把菜单项
+    #      改成「正在打开主界面…」并禁用，用户马上看到"它收到了"。
+    #   ③ **重复点击互杀**：加一个启动中的标志，启动期间再点不会去杀进程。
     try {
+        if ($script:uiLaunching) { return }
         $uiPid = Get-UiProcessId
         if ($uiPid -gt 0) {
             Stop-Process -Id $uiPid -Force -ErrorAction Stop
@@ -812,9 +850,58 @@ $miOpen.Add_Click({
             $miOpen.Text = '打开主界面'
             return
         }
-        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        # -HideConsole：由界面自己隐藏控制台窗口（用 -WindowStyle Hidden 会把窗体一起藏掉）
-        Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote-ExeArg (Join-Path $PSScriptRoot 'errwatch-ui.ps1')), '-HideConsole')
+
+        # 选引擎：优先 pwsh 7（实测启动快 2.4 倍），没有才退回 5.1
+        $ps = $null
+        if (Get-Command Get-ErrwatchPsExe -ErrorAction SilentlyContinue) {
+            try { $ps = Get-ErrwatchPsExe } catch { $ps = $null }
+        }
+        if (-not $ps) { $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+
+        $uiScript = Join-Path $PSScriptRoot 'errwatch-ui.ps1'
+
+        # 即时反馈：用户点完马上看到这一项变了，不用凭感觉猜它有没有收到点击
+        $script:uiLaunching = $true
+        $script:uiPrevText = $miOpen.Text
+        try { $miOpen.Text = '正在打开主界面…'; $miOpen.Enabled = $false } catch { }
+
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $ps
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$uiScript`" -HideConsole"
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true          # ← 黑框根除：不分配控制台
+        $psi.WorkingDirectory = $PSScriptRoot
+        $null = [System.Diagnostics.Process]::Start($psi)
+
+        # 启动是异步的（13~35 秒），用 Timer 轮询 ui.pid，出来后把菜单恢复成"关闭主界面"。
+        # 不用 Start-Sleep：那会把托盘的消息循环卡住，菜单整个无响应。
+        $script:uiWatch = New-Object System.Windows.Forms.Timer
+        $script:uiWatch.Interval = 700
+        $script:uiWatch.Add_Tick({
+            try {
+                $pidNow = Get-UiProcessId
+                if ($pidNow -gt 0) {
+                    $script:uiWatch.Stop(); $script:uiWatch.Dispose(); $script:uiWatch = $null
+                    $script:uiLaunching = $false
+                    $miOpen.Text = '关闭主界面'; $miOpen.Enabled = $true
+                    $ni.ShowBalloonTip(3000, 'errwatch', '主界面已打开', [System.Windows.Forms.ToolTipIcon]::None)
+                    return
+                }
+                $script:uiTick++
+                if ($script:uiTick -ge 60) {     # 60×700ms = 42 秒还没起来 → 老实说没起来
+                    $script:uiWatch.Stop(); $script:uiWatch.Dispose(); $script:uiWatch = $null
+                    $script:uiLaunching = $false
+                    $miOpen.Text = $script:uiPrevText; $miOpen.Enabled = $true
+                    $ni.ShowBalloonTip(6000, 'errwatch', '主界面没能打开（42 秒内没起来）。可以看 ui-crash.log。', [System.Windows.Forms.ToolTipIcon]::Warning)
+                }
+            } catch {
+                try { $script:uiWatch.Stop(); $script:uiWatch.Dispose() } catch { }
+                $script:uiWatch = $null; $script:uiLaunching = $false
+                try { $miOpen.Text = $script:uiPrevText; $miOpen.Enabled = $true } catch { }
+            }
+        })
+        $script:uiTick = 0
+        $script:uiWatch.Start()
     } catch {}
 })
 $miRecover.Add_Click({
@@ -858,9 +945,23 @@ try {
                             Add-Content -LiteralPath $fallbackLog -Encoding UTF8
                     }
                     if ($fresh.Count -gt 0) {
-                        $ni.BalloonTipTitle = 'errwatch：有故障超时未处理'
-                        $ni.BalloonTipText = "$($fresh.Count) 条已超过 $deadlineMinutes 分钟（最近：$($fresh[0].app)）。点托盘查看；不会自动执行任何操作。"
-                        $ni.ShowBalloonTip(6000)
+                        # ★ 2026-10-26（用户：「过期弹窗也可以改动设置，多久过期，要不要弹窗」）：
+                        #   超时提醒现在由「弹窗设置」页的两个字段直接控制：
+                        #     notify.overdue.enabled → 要不要弹
+                        #     notify.overdue.minutes → 超过多久算过期
+                        #   判定收在 core\settings.ps1 的 Test-ErrwatchShouldNotifyOverdue（唯一实现）。
+                        #   优先级：mode=none 是总静音（连这个也不弹）；其它模式只看 enabled。
+                        $mayPop = $true
+                        if (Get-Command Test-ErrwatchShouldNotifyOverdue -ErrorAction SilentlyContinue) {
+                            $mayPop = Test-ErrwatchShouldNotifyOverdue -Mode $notifyMode -OverdueEnabled $notifyOverdueEnabled -Count $fresh.Count
+                        } else {
+                            if ($notifyMode -eq 'none') { $mayPop = $false }
+                        }
+                        if ($mayPop) {
+                            $ni.BalloonTipTitle = 'errwatch：有故障超时未处理'
+                            $ni.BalloonTipText = "$($fresh.Count) 条已超过 $deadlineMinutes 分钟（最近：$($fresh[0].app)）。点托盘查看；不会自动执行任何操作。"
+                            $ni.ShowBalloonTip(6000)
+                        }
                     }
                 } catch { }
             }
@@ -902,8 +1003,45 @@ try {
             #   时长从 5 秒提到 notifySeconds（默认 8 秒，可配 3–30）——
             #   太短看不完（尤其带原因时），太长会挡右下角。气泡本身不抢焦点、不遮窗口，
             #   这就是"不打扰"的实现方式：不用弹窗、不置顶、全屏时直接抑制（原有逻辑）。
+            #
+            # ★ 2026-10-26（用户：「太频繁了，我回到电脑面前就已经弹了 5 个了」）：
+            #   在弹之前先按 settings.json 的 notify.mode 过一遍。被挡下的不是"丢掉"，
+            #   而是记 notify=suppressed —— 事件仍在待处理/主界面/审计里，只是不主动打扰。
             if ($decision.action -eq 'notify' -or $decision.action -eq 'summary') {
                 $toSend = @($decision.notifyable)
+
+                # 按策略过滤（Test-ErrwatchShouldNotify 是唯一实现，在 core\settings.ps1）
+                if (Get-Command Test-ErrwatchShouldNotify -ErrorAction SilentlyContinue) {
+                    $kept = @()
+                    $muted = @()
+                    foreach ($e in $toSend) {
+                        # 同一程序近期崩溃次数：给 important 模式的「反复崩溃」判据用
+                        $rep = 1
+                        try {
+                            $rep = @(@($decision.open) | Where-Object { [string]$_.app -eq [string]$e.app }).Count
+                            if ($rep -lt 1) { $rep = 1 }
+                        } catch { $rep = 1 }
+                        if (Test-ErrwatchShouldNotify -Event $e -Mode $notifyMode -Whitelist $notifyWhitelist -RepeatCount $rep) {
+                            $kept += $e
+                        } else {
+                            $muted += $e
+                        }
+                    }
+                    # 被策略挡下的：写 suppressed（同样去重，避免每 2 秒写一行）
+                    foreach ($e in $muted) {
+                        $id = [string]$e.id
+                        if (-not $suppressedIds.ContainsKey($id)) {
+                            try { Add-Ack $id 'notify' 'suppressed' } catch { }
+                            $suppressedIds[$id] = 1
+                        }
+                    }
+                    $toSend = @($kept)
+                }
+
+                if ($toSend.Count -eq 0) {
+                    # 全被策略挡下了：不弹，但本轮**照常**往下走（菜单计数、状态栏不变）
+                    $toSend = @()
+                } else {
                 $sentIds = @($toSend | ForEach-Object { [string]$_.id })
                 try {
                     if ($decision.action -eq 'summary') {
@@ -938,6 +1076,7 @@ try {
                     foreach ($id in $sentIds) { Add-Ack $id 'notify' 'attempted' }
                 } catch {
                     foreach ($id in $sentIds) { Add-Ack $id 'notify' 'failed' }
+                }
                 }
             }
 

@@ -28,6 +28,11 @@ $script:EwSettingsRanges = @{
     storageFileDays  = @(1, 3650)      # 磁盘文件（副本/崩溃快照）保留天数
 }
 
+# 弹窗策略的合法取值（2026-10-26）。白名单是**封闭**的：写错的模式一律退回默认，
+# 不"猜"用户意图 —— 猜错的表现是「设置里选了不弹，它还在弹」，比报错更难查。
+$script:EwNotifyModes = @('all', 'important', 'whitelist', 'none')
+$script:EwNotifyModeDefault = 'important'
+
 function Get-ErrwatchSettingsPath([string]$Root) {
     return (Join-Path $Root 'settings.json')
 }
@@ -43,7 +48,30 @@ function Get-ErrwatchSettingsDefaults {
         #   天天开关 Office 的人嫌吵，而偶尔用一次的人希望每条都留着。
         sentinel    = [pscustomobject]@{ quietHours = 24 }
         # 2026-10-24：托盘气泡显示时长（用户：「不能消失太快，但不能打扰」）
-        notify      = [pscustomobject]@{ seconds = 8 }
+        # 2026-10-26（用户：「右下角弹窗会不会太频繁了…回到电脑面前就已经弹了 5 个了」）：
+        #   加了 mode —— 弹什么由用户决定，而不是一律全弹：
+        #     all       全部弹（老行为，但**不再默认**：太吵）
+        #     important 只弹「有崩溃证据的」和「反复崩溃的」（重大崩溃）
+        #     whitelist 只弹 whitelist 里的程序（白名单许可）
+        #     none      全部不弹（只记录、只进待处理，绝不打扰）
+        #   默认取 important：宁可按「重要的」弹，也不要开机就被噪音淹掉。
+        #   ★ 关键边界：mode 只影响**弹不弹气泡**，不影响采集、记录、待处理、审计
+        #     —— 事件一条都不会少，只是不主动打扰。
+        #
+        # 2026-10-26 第二版（用户：「过期弹窗也可以改动设置，多久过期，要不要弹窗」）：
+        #   超时提醒（"N 条已超过 X 分钟未处理"）原来只能靠 mode 间接控制，过于绕。
+        #   现在它是**独立的一类**，两项都能在「弹窗设置」页改：
+        #     overdue.enabled  = 要不要弹这类提醒（默认 true）
+        #     overdue.minutes  = 超过多久算过期（默认 30，与 autorrespond.deadlineMinutes 同源）
+        #   语义优先级：mode=none 是"总静音"，连超时提醒也不弹（用户说的"全部不弹窗"）；
+        #   其它模式下超时提醒只看 enabled —— 不再按程序白名单/重要性二次过滤
+        #   （那是聚合提醒"你有 N 条没处理"，按单条程序过滤反而让人看不懂）。
+        notify      = [pscustomobject]@{
+            seconds   = 8
+            mode      = 'important'
+            whitelist = @()
+            overdue   = [pscustomobject]@{ enabled = $true; minutes = 30 }
+        }
         # 2026-10-24（P1，用户拍板）：**手动添加的监视目标**（进程名，不含 .exe）
         #   动机：动态学习（有窗口 ∪ 崩溃历史）是「过程」—— 新装的软件要崩过一次才会被学到。
         #   用户需要一个**可控出口**：现在就想让某个程序被看着，不等学习。
@@ -57,6 +85,119 @@ function Get-ErrwatchSettingsDefaults {
         storage     = [pscustomobject]@{ keepDays = 7; fileKeepDays = 30; copyDir = '' }
     }
 }
+
+# ── 弹窗策略判定（2026-10-26，唯一实现）────────────────────────────────
+# 用户原话：「右下角弹窗会不会太频繁了，我回到电脑面前就已经弹了 5 个了，
+#   我觉得可以在设置里面加一个弹窗设置，比如白名单许可、重大崩溃啊、
+#   部分弹窗啊、全部不弹窗啊」。
+#
+# 四个模式（封闭名单）：
+#   all       全部都弹
+#   important 只弹「重大」的：有崩溃证据（evidence 非空 / verdict=crash-suspected）
+#             或反复崩溃（RepeatCount ≥ 3）。unknown-exit 这类「进程消失」不弹。
+#   whitelist 只弹白名单里的程序（按进程名，含 .exe 与不含都认）
+#   none      全部不弹
+#
+# ★ 这个函数只回答「该不该弹气泡」。采集、记录、进待处理、审计**一律不受影响** ——
+#   选 none 也不等于关掉看护，事件照样一条不少地记着。
+#
+# 返回 $true = 可以弹，$false = 不弹（静默记录）。
+function Test-ErrwatchShouldNotify {
+    param(
+        $Event,                     # 哨兵事件（含 app / verdict / evidence / 等）
+        [string]$Mode = 'important',
+        [string[]]$Whitelist = @(),
+        [int]$RepeatCount = 1       # 同一程序近期崩溃次数（由调用方算好传进来）
+    )
+    $m = ([string]$Mode).Trim().ToLowerInvariant()
+    if ($script:EwNotifyModes -notcontains $m) { $m = $script:EwNotifyModeDefault }
+
+    if ($m -eq 'all') { return $true }
+    if ($m -eq 'none') { return $false }
+
+    $app = ''
+    try { if ($Event) { $app = [string]$Event.app } } catch { $app = '' }
+
+    if ($m -eq 'whitelist') {
+        if (-not $app) { return $false }
+        # 名字规范化两边都做一次：白名单里可能存 "QQ"，事件里可能来 "QQ.exe"
+        $an = ConvertTo-ErrwatchWatchName $app
+        foreach ($w in @($Whitelist)) {
+            $wn = ConvertTo-ErrwatchWatchName ([string]$w)
+            if (-not $wn) { continue }
+            if ($wn -eq $an) { return $true }
+        }
+        return $false
+    }
+
+    # important：只弹有实锤的
+    $verdict = ''
+    $hasEvidence = $false
+    try {
+        if ($Event) {
+            if ($Event.PSObject.Properties['verdict']) { $verdict = [string]$Event.verdict }
+            if ($Event.PSObject.Properties['evidence']) {
+                $ev = $Event.evidence
+                if ($null -ne $ev) {
+                    $s = if ($ev -is [string]) { $ev } else { "$ev" }
+                    $hasEvidence = ($s.Trim().Length -gt 0)
+                }
+            }
+            # Windows 自己记了崩溃 → 也算实锤（有的路径把证据放在 werReportId / evidenceRecordId）
+            foreach ($k in @('evidenceRecordId', 'evidenceReportId')) {
+                if ($Event.PSObject.Properties[$k]) {
+                    $vv = $Event.$k
+                    if ($null -ne $vv -and "$vv".Trim().Length -gt 0) { $hasEvidence = $true }
+                }
+            }
+        }
+    } catch { }
+    if ($verdict -eq 'crash-suspected') { return $true }
+    if ($hasEvidence) { return $true }
+    if ($RepeatCount -ge 3) { return $true }   # 反复崩溃本身就是"重大"
+    return $false
+}
+
+# ── 超时提醒该不该弹（2026-10-26 第二版，唯一实现）──────────────────────
+# 用户原话：「过期弹窗也可以改动设置，多久过期，要不要弹窗」。
+#
+# 语义（刻意做得简单，因为"太绕"本身就是这类功能的通病）：
+#   · 总静音优先：mode = none → 一条都不弹，超时提醒也不弹
+#   · 其它模式下只看 overdue.enabled：关掉就完全不弹这类提醒
+#   · 不再按白名单/重要性对超时提醒做二次过滤 —— 它是"你有 N 条没处理"的聚合提醒，
+#     按单条程序过滤会让人看不懂「为什么它跳过了某些条」
+#
+# 返回 $true = 可以弹。
+function Test-ErrwatchShouldNotifyOverdue {
+    param(
+        [string]$Mode = 'important',
+        $OverdueEnabled = $true,
+        [int]$Count = 0
+    )
+    $m = ([string]$Mode).Trim().ToLowerInvariant()
+    if ($script:EwNotifyModes -notcontains $m) { $m = $script:EwNotifyModeDefault }
+    if ($m -eq 'none') { return $false }          # 总静音压过一切
+    if ($Count -le 0) { return $false }           # 没有超时条目就不弹
+    if ($null -eq $OverdueEnabled) { return $true }
+    $b = $OverdueEnabled
+    if ($b -is [bool]) { return $b }
+    return -not (@('false', '0', 'no', 'off', '') -contains ([string]$b).Trim().ToLowerInvariant())
+}
+
+
+# 给界面用的一句人话（选项旁的解释，避免用户看不懂模式名的含义）
+function Get-ErrwatchNotifyModeLabel {
+    param([string]$Mode)
+    $m = ([string]$Mode).Trim().ToLowerInvariant()
+    switch ($m) {
+        'all' { return '全部弹窗（每条退出都提醒）' }
+        'important' { return '只弹重大崩溃（有崩溃证据 / 反复崩溃）' }
+        'whitelist' { return '只弹白名单里的程序' }
+        'none' { return '全部不弹窗（只记录，不打扰）' }
+        default { return '只弹重大崩溃（有崩溃证据 / 反复崩溃）' }
+    }
+}
+
 
 # ── 手动监视目标的名字规范化（2026-10-24，P1）──────────────────────────────
 # 用户可能粘贴完整路径、带 .exe、带多余空格。统一成哨兵/Get-Process 认的进程名：
@@ -131,12 +272,55 @@ function Get-ErrwatchSettings([string]$Root) {
         }
     } catch { }
 
-    # 气泡显示时长（2026-10-24）
+    # 气泡显示时长（2026-10-24）+ 弹窗策略（2026-10-26）
     try {
         if ($raw.PSObject.Properties['notify'] -and $raw.notify.PSObject.Properties['seconds']) {
             $v = ConvertTo-ErrwatchSettingNumber $raw.notify.seconds $script:EwSettingsRanges.notifySeconds[0] $script:EwSettingsRanges.notifySeconds[1]
             if ($null -ne $v) { $def.notify.seconds = $v }
         }
+    } catch { }
+    # 弹窗模式：只接受封闭名单里的值；写错就退回默认，并在返回值里保留原文供界面提示
+    try {
+        if ($raw.PSObject.Properties['notify'] -and $raw.notify.PSObject.Properties['mode']) {
+            $m = ([string]$raw.notify.mode).Trim().ToLowerInvariant()
+            if ($script:EwNotifyModes -contains $m) { $def.notify.mode = $m }
+        }
+    } catch { }
+    # 白名单：与 watch.extra 同一套名字规范化（允许粘贴完整路径/带 .exe）
+    try {
+        if ($raw.PSObject.Properties['notify'] -and $raw.notify.PSObject.Properties['whitelist'] -and $null -ne $raw.notify.whitelist) {
+            $wl = @()
+            foreach ($n in @($raw.notify.whitelist)) {
+                $v = ConvertTo-ErrwatchWatchName ([string]$n)
+                if ($v -and ($wl -notcontains $v)) { $wl += $v }
+            }
+            $def.notify.whitelist = @($wl)
+        }
+    } catch { }
+    # 超时提醒（2026-10-26 第二版）：开关 + 过期分钟数
+    try {
+        if ($raw.PSObject.Properties['notify'] -and $raw.notify.PSObject.Properties['overdue'] -and $raw.notify.overdue) {
+            $ov = $raw.notify.overdue
+            if ($ov.PSObject.Properties['enabled']) {
+                # 只认真正的布尔语义；字符串 "false" 也按 false 处理（用户手工改文件时很常见）
+                $b = $ov.enabled
+                $def.notify.overdue.enabled = if ($b -is [bool]) { $b } else {
+                    -not (@('false', '0', 'no', 'off', '') -contains ([string]$b).Trim().ToLowerInvariant())
+                }
+            }
+            if ($ov.PSObject.Properties['minutes']) {
+                # 与 autorrespond.deadlineMinutes 同一个区间：5 分钟 ~ 24 小时
+                $v = ConvertTo-ErrwatchSettingNumber $ov.minutes $script:EwSettingsRanges.deadlineMinutes[0] $script:EwSettingsRanges.deadlineMinutes[1]
+                if ($null -ne $v) { $def.notify.overdue.minutes = $v }
+            }
+        }
+    } catch { }
+    # 同源兜底：如果用户只在「时限与兜底」页改过 deadlineMinutes，
+    # overdue.minutes 没显式配过，就跟着走 —— 避免"两个地方各说一套"。
+    try {
+        $hasOvMin = ($raw.PSObject.Properties['notify'] -and $raw.notify.PSObject.Properties['overdue'] -and
+                     $raw.notify.overdue -and $raw.notify.overdue.PSObject.Properties['minutes'])
+        if (-not $hasOvMin) { $def.notify.overdue.minutes = $def.autorespond.deadlineMinutes }
     } catch { }
 
     # 哨兵降噪折叠窗口（2026-10-24，ISSUES.md B8）

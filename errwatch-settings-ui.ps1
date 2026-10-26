@@ -114,6 +114,7 @@ $side.Controls.Add($lblBrand)
 $navItems = @(
     @{ key = 'recovery'; text = '救援目录' },
     @{ key = 'watch';    text = '监视目标' },
+    @{ key = 'notify';   text = '弹窗设置' },
     @{ key = 'timing';   text = '时限与兜底' },
     @{ key = 'storage';  text = '存储与清理' },
     @{ key = 'tools';    text = '工具' },
@@ -445,6 +446,203 @@ $pageTiming.Controls.Add($lblFixTxt)
 # 先把事实写进界面（用户问过「我如果选择不处理 它也会产生文件吗」）：
 #   点「不需要处理」**不产生任何文件**，只写一行 ack。会占磁盘的只有两类：
 #   救援副本（你备份时选的目录）+ 崩溃快照（WER dump）。
+# ═══════════════════════════════════════════════════════════════════════════
+# 弹窗设置页（2026-10-26，用户：「右下角弹窗会不会太频繁了，我回到电脑面前
+#   就已经弹了 5 个了，我觉得可以在设置里面加一个弹窗设置，比如白名单许可、
+#   重大崩溃啊、部分弹窗啊、全部不弹窗啊」）
+#
+# 设计要点（三个都不能少）：
+#   ① **只影响弹不弹气泡**：采集、记录、待处理、审计一条都不少。页面必须把这句话
+#      写在最显眼的位置 —— 否则用户会以为选「全部不弹」等于关掉看护。
+#   ② 白名单输入框只在选「白名单」时才有意义 → 跟着模式禁用/启用，而不是一直可填。
+#   ③ 每个选项旁边给一句人话，不用用户去猜 "important" 是什么意思。
+# ═══════════════════════════════════════════════════════════════════════════
+$pageNotify = New-Object System.Windows.Forms.Panel
+$pageNotify.Dock = 'Fill'
+$pageNotify.BackColor = $cBg
+$pageNotify.Visible = $false
+$body.Controls.Add($pageNotify)
+
+$pageNotify.Controls.Add((New-Title '弹窗设置' 8))
+
+$lblNotifyNotice = New-Object System.Windows.Forms.Label
+$lblNotifyNotice.Location = New-Object System.Drawing.Point(22, 36)
+$lblNotifyNotice.Size = New-Object System.Drawing.Size(540, 52)
+$lblNotifyNotice.Font = $fontSmall
+$lblNotifyNotice.ForeColor = $cText
+$lblNotifyNotice.Text = @(
+    '这里只管「要不要在右下角弹气泡提醒」。',
+    '不管选哪一项，退出和崩溃都照常记录、照常进待处理、照常能在主界面看到 —— 选「全部不弹」也不等于关掉看护。'
+) -join "`r`n"
+$pageNotify.Controls.Add($lblNotifyNotice)
+
+$lblNotifyModeHead = New-Object System.Windows.Forms.Label
+$lblNotifyModeHead.Text = '什么时候提醒我'
+$lblNotifyModeHead.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
+$lblNotifyModeHead.ForeColor = $cText
+$lblNotifyModeHead.AutoSize = $true
+$lblNotifyModeHead.Location = New-Object System.Drawing.Point(22, 96)
+$pageNotify.Controls.Add($lblNotifyModeHead)
+
+# 四个模式（与 core\settings.ps1 的 $script:EwNotifyModes 一一对应）
+$rbNotifyAll = New-Object System.Windows.Forms.RadioButton
+$rbNotifyAll.Text = '全部弹窗 —— 每条退出都提醒（最吵）'
+$rbNotifyAll.Location = New-Object System.Drawing.Point(26, 124)
+$rbNotifyAll.Size = New-Object System.Drawing.Size(520, 24)
+$rbNotifyAll.ForeColor = $cText
+$pageNotify.Controls.Add($rbNotifyAll)
+
+$rbNotifyImportant = New-Object System.Windows.Forms.RadioButton
+$rbNotifyImportant.Text = '只弹重大崩溃 —— 有崩溃证据的、或反复崩溃的（推荐）'
+$rbNotifyImportant.Location = New-Object System.Drawing.Point(26, 152)
+$rbNotifyImportant.Size = New-Object System.Drawing.Size(520, 24)
+$rbNotifyImportant.ForeColor = $cText
+$pageNotify.Controls.Add($rbNotifyImportant)
+
+$rbNotifyWhitelist = New-Object System.Windows.Forms.RadioButton
+$rbNotifyWhitelist.Text = '只弹白名单里的程序 —— 其他一律不打扰'
+$rbNotifyWhitelist.Location = New-Object System.Drawing.Point(26, 180)
+$rbNotifyWhitelist.Size = New-Object System.Drawing.Size(520, 24)
+$rbNotifyWhitelist.ForeColor = $cText
+$pageNotify.Controls.Add($rbNotifyWhitelist)
+
+$rbNotifyNone = New-Object System.Windows.Forms.RadioButton
+$rbNotifyNone.Text = '全部不弹窗 —— 只记录，绝对不打扰'
+$rbNotifyNone.Location = New-Object System.Drawing.Point(26, 208)
+$rbNotifyNone.Size = New-Object System.Drawing.Size(520, 24)
+$rbNotifyNone.ForeColor = $cText
+$pageNotify.Controls.Add($rbNotifyNone)
+
+# 白名单输入（只在白名单模式启用）
+$pageNotify.Controls.Add((New-FieldLabel '白名单（程序名，逗号分隔）' 22 246))
+$txtNotifyWl = New-Input 22 268 460
+$txtNotifyWl.Text = (@($s.notify.whitelist) -join ', ')
+$pageNotify.Controls.Add($txtNotifyWl)
+$pageNotify.Controls.Add((New-Hint '例：gcad, winword, excel。可以带 .exe，也可以粘完整路径，保存时会自动规范化。' 22 296 540))
+
+$lblNotifyWlState = New-Object System.Windows.Forms.Label
+$lblNotifyWlState.Font = $fontSmall
+$lblNotifyWlState.ForeColor = $cMuted
+$lblNotifyWlState.Location = New-Object System.Drawing.Point(22, 320)
+$lblNotifyWlState.Size = New-Object System.Drawing.Size(540, 20)
+$pageNotify.Controls.Add($lblNotifyWlState)
+
+# 气泡显示时长（原来在时限页之外没有入口，顺手放这儿更顺手）
+$pageNotify.Controls.Add((New-FieldLabel '气泡停留秒数' 22 352))
+$txtNotifySec = New-Input 22 374 80
+$txtNotifySec.Text = [string]$s.notify.seconds
+$pageNotify.Controls.Add($txtNotifySec)
+$pageNotify.Controls.Add((New-Hint '3–30 秒。太短看不完，太长挡住右下角。全屏时本来就不弹。' 118 378 440))
+
+# ── 超时提醒（2026-10-26 第二版，用户：「过期弹窗也可以改动设置，多久过期，要不要弹窗」）──
+$pageNotify.Controls.Add((New-FieldLabel '超时未处理提醒' 22 414))
+$chkNotifyOverdue = New-Object System.Windows.Forms.CheckBox
+$chkNotifyOverdue.Text = '弹气泡提醒我（取消勾选 = 完全不弹这类提醒）'
+$chkNotifyOverdue.Location = New-Object System.Drawing.Point(26, 440)
+$chkNotifyOverdue.Size = New-Object System.Drawing.Size(480, 24)
+$chkNotifyOverdue.ForeColor = $cText
+$chkNotifyOverdue.Checked = $true
+try { if ($s.notify.overdue.PSObject.Properties['enabled']) { $chkNotifyOverdue.Checked = [bool]$s.notify.overdue.enabled } } catch { }
+$pageNotify.Controls.Add($chkNotifyOverdue)
+
+$pageNotify.Controls.Add((New-FieldLabel '超过多久算过期（分钟）' 22 474))
+# ★ 与「时限与兜底」页的 deadlineMinutes 是**同一个字段**：两个输入框双向同步，
+#   绝不允许出现"两处各存一份"（那是两份真相，必然漂移）。
+$txtOverdueMin = New-Input 250 472 80
+$ovMinInit = 30
+try {
+    if ($s.notify.overdue.PSObject.Properties['minutes'] -and $s.notify.overdue.minutes) { $ovMinInit = [int]$s.notify.overdue.minutes }
+    elseif ($s.autorespond.PSObject.Properties['deadlineMinutes']) { $ovMinInit = [int]$s.autorespond.deadlineMinutes }
+} catch { }
+$txtOverdueMin.Text = [string]$ovMinInit
+$pageNotify.Controls.Add($txtOverdueMin)
+$pageNotify.Controls.Add((New-Hint '5–1440 分钟。与「时限与兜底」页是同一个值，改哪边都一样。' 340 476 280))
+
+$lblOverdueState = New-Object System.Windows.Forms.Label
+$lblOverdueState.Font = $fontSmall
+$lblOverdueState.ForeColor = $cMuted
+$lblOverdueState.Location = New-Object System.Drawing.Point(22, 506)
+$lblOverdueState.Size = New-Object System.Drawing.Size(540, 46)
+$pageNotify.Controls.Add($lblOverdueState)
+
+function Update-OverdueState {
+    $on = $chkNotifyOverdue.Checked
+    $mn = $txtOverdueMin.Text.Trim(); if (-not $mn) { $mn = '?' }
+    if (-not $on) {
+        $lblOverdueState.Text = '超时提醒：不弹。事件照常记录、照常进待处理 —— 只是不主动弹气泡。'
+        $lblOverdueState.ForeColor = $cMuted
+    } elseif ($rbNotifyNone.Checked) {
+        $lblOverdueState.Text = "⚠ 你选了「全部不弹窗」，那是总静音 —— 即使这里的勾选是开的，超时提醒也不会弹。"
+        $lblOverdueState.ForeColor = [System.Drawing.Color]::DarkOrange
+    } else {
+        $lblOverdueState.Text = "超时提醒：待处理超过 $mn 分钟还没处理时，弹一次气泡。"
+        $lblOverdueState.ForeColor = $cText
+    }
+}
+$chkNotifyOverdue.Add_CheckedChanged({ try { Update-OverdueState } catch { } })
+$txtOverdueMin.Add_TextChanged({ try { Update-OverdueState } catch { } })
+
+# 当前生效状态：让用户一眼知道"现在到底会不会弹"
+$lblNotifyNow = New-Object System.Windows.Forms.Label
+$lblNotifyNow.Font = $fontSmall
+$lblNotifyNow.ForeColor = $cText
+$lblNotifyNow.Location = New-Object System.Drawing.Point(22, 556)
+$lblNotifyNow.Size = New-Object System.Drawing.Size(540, 40)
+$pageNotify.Controls.Add($lblNotifyNow)
+
+function Update-NotifyPage {
+    # 选中值与白名单可用性联动
+    $isWl = $rbNotifyWhitelist.Checked
+    $txtNotifyWl.Enabled = $isWl
+    if ($isWl) {
+        $lblNotifyWlState.Text = '白名单模式：只有上面这些程序退出才会弹气泡。'
+        $lblNotifyWlState.ForeColor = $cText
+    } else {
+        $lblNotifyWlState.Text = '（当前不是白名单模式，这一栏不生效）'
+        $lblNotifyWlState.ForeColor = $cMuted
+    }
+    $what = if ($rbNotifyAll.Checked) { '每条退出都会弹气泡' }
+            elseif ($rbNotifyImportant.Checked) { '只弹有崩溃证据 / 反复崩溃的' }
+            elseif ($rbNotifyWhitelist.Checked) { '只弹白名单里的程序' }
+            else { '一条气泡都不会弹（记录照常）' }
+    $lblNotifyNow.Text = "当前选择：$what"
+    try { Update-OverdueState } catch { }
+}
+
+$rbNotifyAll.Add_CheckedChanged({ try { Update-NotifyPage } catch { } })
+$rbNotifyImportant.Add_CheckedChanged({ try { Update-NotifyPage } catch { } })
+$rbNotifyWhitelist.Add_CheckedChanged({ try { Update-NotifyPage } catch { } })
+$rbNotifyNone.Add_CheckedChanged({ try { Update-NotifyPage } catch { } })
+
+# ★ 两个输入框同步（超时分钟 ↔ 兜底决策时限）。
+#   加 $script:syncing 防回环：A 改 → 同步给 B → B 的 TextChanged 又改 A …… 无限递归。
+$script:syncing = $false
+$txtOverdueMin.Add_TextChanged({
+    if ($script:syncing) { return }
+    try {
+        $script:syncing = $true
+        if ($txtDead) { $txtDead.Text = $txtOverdueMin.Text }
+    } catch { } finally { $script:syncing = $false }
+})
+$txtDead.Add_TextChanged({
+    if ($script:syncing) { return }
+    try {
+        $script:syncing = $true
+        if ($txtOverdueMin) { $txtOverdueMin.Text = $txtDead.Text }
+    } catch { } finally { $script:syncing = $false }
+})
+
+# 初值：读当前设置回显（读不到就按默认 important）
+$curMode = 'important'
+try { if ($s.PSObject.Properties['notify'] -and $s.notify.PSObject.Properties['mode'] -and $s.notify.mode) { $curMode = [string]$s.notify.mode } } catch { }
+switch ($curMode) {
+    'all' { $rbNotifyAll.Checked = $true }
+    'whitelist' { $rbNotifyWhitelist.Checked = $true }
+    'none' { $rbNotifyNone.Checked = $true }
+    default { $rbNotifyImportant.Checked = $true }
+}
+try { Update-NotifyPage } catch { }
+
 $pageStorage = New-Object System.Windows.Forms.Panel
 $pageStorage.Dock = 'Fill'
 $pageStorage.BackColor = $cBg
@@ -794,6 +992,7 @@ function Update-List {
 function Show-Page([string]$key) {
     $pageRecovery.Visible = ($key -eq 'recovery')
     $pageWatch.Visible = ($key -eq 'watch')
+    $pageNotify.Visible = ($key -eq 'notify')
     $pageTiming.Visible = ($key -eq 'timing')
     $pageStorage.Visible = ($key -eq 'storage')
     $pageTools.Visible = ($key -eq 'tools')
@@ -968,6 +1167,51 @@ $btnSave.Add_Click({
                 [void][System.Windows.Forms.MessageBox]::Show("目录不可写，标记文件没建成：`n$copyDir`n`n这个目录不会被纳入自动清理（不会误删你的文件）。")
             }
         }
+
+        # 弹窗设置（2026-10-26）：模式 + 白名单 + 停留秒数
+        $notifyModeNew = if ($rbNotifyAll.Checked) { 'all' }
+                         elseif ($rbNotifyWhitelist.Checked) { 'whitelist' }
+                         elseif ($rbNotifyNone.Checked) { 'none' }
+                         else { 'important' }
+        $nsec = 0
+        if (-not [int]::TryParse($txtNotifySec.Text.Trim(), [ref]$nsec)) { [void][System.Windows.Forms.MessageBox]::Show('「气泡停留秒数」要填整数（3–30）'); return }
+        $vNsec = ConvertTo-ErrwatchSettingNumber $nsec $script:EwSettingsRanges.notifySeconds[0] $script:EwSettingsRanges.notifySeconds[1]
+        if ($null -eq $vNsec) { [void][System.Windows.Forms.MessageBox]::Show("气泡停留 $nsec 秒超出范围（3–30），没有保存。"); return }
+
+        # 白名单：只在白名单模式下必须非空 —— 选了白名单却一条都不填，等于静音，
+        # 那是用户很容易踩的坑（以为"我选白名单了就该弹"）。
+        $wlRaw = $txtNotifyWl.Text
+        $wlList = @()
+        foreach ($piece in ($wlRaw -split '[,，;；\s]+')) {
+            $pn = $piece.Trim()
+            if (-not $pn) { continue }
+            $norm = $null
+            if (Get-Command ConvertTo-ErrwatchWatchName -ErrorAction SilentlyContinue) { $norm = ConvertTo-ErrwatchWatchName $pn }
+            if (-not $norm) { $norm = $pn }
+            if ($wlList -notcontains $norm) { $wlList += $norm }
+        }
+        if ($notifyModeNew -eq 'whitelist' -and $wlList.Count -eq 0) {
+            [void][System.Windows.Forms.MessageBox]::Show("你选了「只弹白名单里的程序」，但白名单是空的。`n`n空着就等于一条都不弹 —— 要么填上程序名，要么换成别的模式。")
+            return
+        }
+
+        $st.notify.mode = $notifyModeNew
+        $st.notify.whitelist = @($wlList)
+        $st.notify.seconds = $vNsec
+
+        # 超时提醒（2026-10-26 第二版）：开关 + 过期分钟数。
+        # 分钟数与「时限与兜底」页同源 —— 这里校验一次，写盘时两处写成同一个值，
+        # 绝不留下"两处各说一套"的隐患。
+        $ovMin = 0
+        if (-not [int]::TryParse($txtOverdueMin.Text.Trim(), [ref]$ovMin)) { [void][System.Windows.Forms.MessageBox]::Show('「超过多久算过期」要填整数分钟（5–1440）'); return }
+        $vOvMin = ConvertTo-ErrwatchSettingNumber $ovMin $script:EwSettingsRanges.deadlineMinutes[0] $script:EwSettingsRanges.deadlineMinutes[1]
+        if ($null -eq $vOvMin) { [void][System.Windows.Forms.MessageBox]::Show("超时提醒 $ovMin 分钟超出范围（5–1440），没有保存。"); return }
+        if (-not $st.notify.PSObject.Properties['overdue'] -or -not $st.notify.overdue) {
+            $st.notify | Add-Member -NotePropertyName overdue -NotePropertyValue ([pscustomobject]@{ enabled = $true; minutes = 30 }) -Force
+        }
+        $st.notify.overdue.enabled = [bool]$chkNotifyOverdue.Checked
+        $st.notify.overdue.minutes = $vOvMin
+        $st.autorespond.deadlineMinutes = $vOvMin
 
         [void](Save-ErrwatchSettings -Root $root -Settings $st)
         [void][System.Windows.Forms.MessageBox]::Show('已保存。哨兵下一次同步会用新的保留天数（只影响"已处理完的记录"）。')

@@ -726,6 +726,21 @@ if (Test-Path -LiteralPath $spTest) {
 } else {
     Write-Host '  跳过：test-service-port.ps1 不存在'
 }
+# ── 弹窗策略（2026-10-26）：太频繁会被用户直接关掉，那比不装更糟 ─────────────
+# 用户原话：「右下角弹窗会不会太频繁了，我回到电脑面前就已经弹了 5 个了」
+# 守两件事：① 四种模式的判定是对的；② 只影响气泡，不影响采集/记录/待处理。
+# 顺带守「超时提醒的分钟数与时限页同源」—— 两处各存一份必然漂移。
+Write-Host ""
+$npTest = Join-Path $PSScriptRoot 'test-notify-policy.ps1'
+$npFail = $false
+if (Test-Path -LiteralPath $npTest) {
+    $npExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    $npOut = @(& $npExe -NoProfile -ExecutionPolicy Bypass -File $npTest 2>&1)
+    $npOut | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { $npFail = $true; Write-Host '  ⚠ 弹窗策略 FAIL —— 门禁将判失败' -ForegroundColor Red }
+} else {
+    Write-Host '  跳过：test-notify-policy.ps1 不存在'
+}
 # 结果写文件（供历史对比）
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $rulesFile = Resolve-CoreAsset 'rules.json' $root
@@ -747,7 +762,7 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot "last-run.json") -Encoding UTF8
 $report | ConvertTo-Json -Compress | Add-Content (Join-Path $PSScriptRoot 'history.jsonl') -Encoding UTF8
 
-if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
+if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
 exit 0
 
 
