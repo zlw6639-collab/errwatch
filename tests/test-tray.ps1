@@ -187,7 +187,7 @@ Case 'L 正常通知不写 suppressed' {
     $p = @()
     Remove-Item -LiteralPath $acksFile -Force -ErrorAction SilentlyContinue
     New-Pending @('id1')
-    $null = & $pwshExe -NoProfile -File $tray -DurationSec 2 -ForceWindowed -StateDir $fx 2>&1
+    $null = & $pwshExe -NoProfile -File $tray -DurationSec 2 -ForceWindowed -StateDir $fx -InstanceName "unittest-tray" 2>&1
     $lines = @(Get-Content -LiteralPath $acksFile -Encoding UTF8 | Where-Object { $_.Trim() })
     $suppressed = @($lines | Where-Object { $_ -match '"status":"suppressed"' })
     if ($suppressed.Count -gt 0) { $p += "正常通知写了 $($suppressed.Count) 条 suppressed" }

@@ -35,7 +35,12 @@ param(
     [switch]$ForceWindowed,
     [string]$StateDir = '',
     # 通知策略文件（默认 core\notify.json）；测试用来注入临时配置
-    [string]$NotifyConfig = ''
+    [string]$NotifyConfig = '',
+    # ★ 2026-10-26（用户看到托盘里三个同样的图标，问「可以做唯一性吗」）：
+    #   单实例锁改成**整机唯一**，不再按安装目录区分 —— 用户的心智模型是
+    #   "一个程序一个图标"，出现三个就是 bug（哪怕它们来自不同目录）。
+    #   测试要跑独立实例时**显式**传 -InstanceName（与哨兵的机制一致）。
+    [string]$InstanceName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,34 +51,34 @@ $root = $PSScriptRoot
 # 而托盘此前**没有任何实例检查** —— 它用的那把 Mutex 是 `errwatch-acks-write`（写 ACK 的），
 # 不是实例锁。没有这一条，引导逻辑一跑就在托盘区堆出两个图标。
 #
-# ★ 锁名必须**按状态目录区分**（2026-10-26 实测踩到）：
-#   第一版用的是固定名 `Local\errwatch-tray-instance`。结果 test-tray 用 `-StateDir <临时目录>`
-#   起独立实例时，被**生产正在跑的那个托盘**挡在门外直接退出 —— 用例 L 因此变红
-#   （报"找不到 tray-acks.jsonl"，其实是测试托盘压根没跑起来）。
-#   那不是测试写得不对：**不同状态目录本来就是两个互不相干的实例**
-#   （各自的 pending / acks / settings），把它们当成"同一个实例"是判据错了。
-#   现在把状态目录的哈希拼进锁名：生产用默认目录，测试用临时目录，互不干扰。
+# ★ 锁名：默认**整机唯一**（2026-10-26 第三版，用户看到三个图标后定案）
+#   演进过程与教训：
+#     ① 第一版固定名 `Local\errwatch-tray-instance` → test-tray 用 `-StateDir <临时目录>`
+#        起独立实例时被生产托盘挡在门外，用例 L 变红（"找不到 tray-acks.jsonl"）。
+#     ② 第二版把**状态目录哈希**拼进锁名 → 测试能跑独立实例了，
+#        但副作用是**不同安装目录各自起一个图标**。用户实际看到托盘里**三个**同样的眼睛：
+#        一个生产的 + 两个我测干净解压时忘清理的，因为它们的 temp 目录各自算不同实例。
+#     ③ 现在（定案）：默认锁名**不含目录** —— 整机一个 errwatch 托盘。
+#        要跑独立实例的**测试**必须显式传 `-InstanceName`（与哨兵的机制一致，
+#        项目里本来就有这个约定）。这样"用户永远只看到一个图标"，
+#        而测试的隔离靠显式参数，不靠"偷偷用不同目录"。
 #   -Check 是自检，不参与（不能因为跑一次自检就把正在用的托盘挤掉）。
 $stateDir = if ($StateDir) { $StateDir } else { $root }
 $script:trayMutex = $null
 if (-not $Check) {
     $lockName = 'Local\errwatch-tray-instance'
-    try {
-        # 归一化路径（大小写/尾斜杠不影响判定），取 16 位 SHA256 做锁名后缀
-        $norm = ''
-        try { $norm = [System.IO.Path]::GetFullPath($stateDir).TrimEnd('\').ToLowerInvariant() } catch { $norm = "$stateDir".ToLowerInvariant() }
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        $hash = [BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($norm))).Replace('-', '').Substring(0, 16)
-        $sha.Dispose()
-        $lockName = "Local\errwatch-tray-instance-$hash"
-    } catch { }
+    if ($InstanceName) {
+        # 只信任 ASCII 安全的名字，避免奇怪的模型字符进 Mutex 名
+        $safe = ([string]$InstanceName) -replace '[^A-Za-z0-9_\-]', '_'
+        if ($safe) { $lockName = "Local\errwatch-tray-instance-$safe" }
+    }
 
     $gotInstance = $false
     try {
         $script:trayMutex = New-Object System.Threading.Mutex($false, $lockName)
         try { $gotInstance = $script:trayMutex.WaitOne(0) }
         catch [System.Threading.AbandonedMutexException] { $gotInstance = $true }   # 上个托盘崩了，锁已归我们
-        if (-not $gotInstance) { exit 0 }     # 同一状态目录已有托盘：静默退出
+        if (-not $gotInstance) { exit 0 }     # 已有托盘在跑：静默退出（不是错误）
     } catch {
         # 拿不到 Mutex（受限环境）→ 退回按进程判断，绝不做成"两个都起"
         $script:trayMutex = $null

@@ -82,10 +82,33 @@ Case 'B 幂等且不卡死（启动不能拖住调用方）' {
     $t0 = & $count 'tray'
     # ★ 必须加 -NoPopup：实测 MessageBox 在无头环境里要**阻塞 10.6 秒**才返回。
     #   -NoUi 也不开界面（别把用户正在用的窗口搅进来）。
+    #
+    # ★ 2026-10-26（用户看到托盘里三个同样的图标）：这个用例会**真的启动**哨兵/托盘，
+    #   而某些环境下（例如在干净解压目录里跑门禁）本目录没有在跑的实例 → 会起新的，
+    #   用例结束却没人清理 → 留下**孤儿托盘**（那三个图标里有两个就是这么来的）。
+    #   现在：启动前记下已有 pid，测完**只杀本次新增的**。
+    #   绝不用"按路径杀" —— 在开发目录跑测试时那会杀掉用户正在用的托盘。
+    $listProcs = {
+        @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'errwatch-(sentinel|tray)\.ps1' } |
+            ForEach-Object { [int]$_.ProcessId })
+    }
+    $pidsBefore = @(& $listProcs)
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $out = @(& $psExe -NoProfile -ExecutionPolicy Bypass -File $launch -NoUi -NoPopup 2>&1)
-    $code = $LASTEXITCODE
-    $sw.Stop()
+    $out = @()
+    $code = 0
+    try {
+        $out = @(& $psExe -NoProfile -ExecutionPolicy Bypass -File $launch -NoUi -NoPopup 2>&1)
+        $code = $LASTEXITCODE
+    } finally {
+        $sw.Stop()
+        try {
+            $pidsAfter = @(& $listProcs)
+            foreach ($np in @($pidsAfter | Where-Object { $pidsBefore -notcontains $_ })) {
+                Stop-Process -Id $np -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
     $sec = $sw.Elapsed.TotalSeconds
 
     # ① 绝不能卡住 —— 这是本轮踩的真坑：Process.Start 在 UseShellExecute=false 时
@@ -162,10 +185,18 @@ Case 'E 托盘有单实例锁（否则会堆两个图标）' {
     if ($t -notmatch "AbandonedMutexException") { $p += '缺 AbandonedMutexException 处理（上个托盘崩了会导致永远起不来）' }
     # 锁必须在 $Check 之外 —— 自检不该把正在用的托盘挤掉
     if ($t -notmatch 'if \(-not \$Check\)') { $p += '实例锁没有排除 -Check 分支' }
-    # ★ 锁名必须带**状态目录的哈希**（2026-10-26 实测：固定名会让 test-tray 的
-    #   `-StateDir <临时目录>` 实例被生产托盘挡在门外，用例 L 直接变红）。
-    if ($t -notmatch 'errwatch-tray-instance-\$hash') { $p += '锁名没带状态目录哈希 —— 不同 StateDir 的实例会互相挡（test-tray 会红）' }
-    if ($t -notmatch 'SHA256') { $p += '没有用 SHA256 生成状态目录后缀' }
+    # ★ 2026-10-26 定案（用户看到托盘里三个同样的图标）：锁默认必须**整机唯一**，
+    #   不能把安装目录/状态目录的哈希拼进锁名 —— 那会导致"换个目录就多一个图标"，
+    #   而用户的心智模型是"一个程序一个图标"。
+    if ($t -match 'errwatch-tray-instance-\$hash') {
+        $p += '锁名仍按状态目录哈希区分 —— 不同目录会各起一个图标（用户看到的三个就是这么来的）'
+    }
+    if ($t -match 'SHA256') {
+        $p += '锁名里还有目录哈希（应改为整机唯一）'
+    }
+    # 测试要跑独立实例时必须**显式**指定，不能靠"偷偷用不同目录"
+    if ($t -notmatch '\$InstanceName') { $p += '没有 -InstanceName 参数（测试无法安全地跑独立实例）' }
+    if ($t -notmatch 'errwatch-tray-instance-\$safe') { $p += 'InstanceName 没有拼进锁名' }
     $p
 }
 
