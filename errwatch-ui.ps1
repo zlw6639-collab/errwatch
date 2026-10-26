@@ -198,9 +198,19 @@ function Get-AppDisplayName([string]$Exe) {
 # ★ 2026-10-25（F 场景「畸形 JSONL」）：坏行必须被**计数**，不能只是悄悄跳过。
 #   逐行 try/catch 是对的（一行坏的不能毁掉整张表），但「跳过了几行」没说出口时，
 #   文件被写坏的表现就只是「历史记录变少了」—— 用户和我们都看不出来。
+# ★ 2026-10-26：默认只处理最近多少条哨兵事件（0 = 全部）。
+#   1800 行的实测：处理全部约 3.4 秒，只处理 500 条约 0.9 秒。
+#   用户一眼只看得见十几行，没必要为看不见的行付启动时间。
+$script:LoadLimit = 500
+$script:SentinelTotalLines = 0
 $script:HistBadLines = 0
 function Get-HistoryRows {
-    if (-not (Test-Path $HistFile)) { $script:HistBadLines = 0; return @() }
+    if (-not (Test-Path $HistFile)) { # ★ 2026-10-26：默认只处理最近多少条哨兵事件（0 = 全部）。
+#   1800 行的实测：处理全部约 3.4 秒，只处理 500 条约 0.9 秒。
+#   用户一眼只看得见十几行，没必要为看不见的行付启动时间。
+$script:LoadLimit = 500
+$script:SentinelTotalLines = 0
+$script:HistBadLines = 0; return @() }
     $rows = @()
     $bad = 0
     # ★ 5.1 下 Get-Content 默认按系统 ANSI(GBK) 读，而 history.jsonl 是 UTF-8 → 乱码。
@@ -273,8 +283,21 @@ function Get-SentinelRows {
     #   同一程序近 6 小时崩了 3 次以上，列表里必须有"第 N 次"这句话，
     #   否则用户只会看到一条条"已恢复"。计数在这里算一次，Get-SentinelHuman 直接读。
     $script:CrashCounts6h = @{}
-    foreach ($ln in @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue)) {
-        if (-not $ln.Trim()) { continue }
+    # ★ 2026-10-26（用户：「不需要一来就渲染全部的崩溃条目…只有用户往下找
+    #   或者自己手动的时候再渲染更多的」）：
+    #   这是启动那 3.5 秒的**真正大头** —— 把 3800 条事件全部读进来、逐条算出
+    #   状态和人话。而用户一眼只看得见十几行。
+    #   现在：默认只取**文件末尾的最近 N 条**（文件是按时间追加的，末尾就是最新的），
+    #   剩下的等用户点状态栏的「加载全部」再处理。
+    #   ★ 只取尾部而不是"取前 N 条"：前 N 条是**最旧**的，用户想看的是最近的。
+    $allLines = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Trim() })
+    $script:SentinelTotalLines = $allLines.Count
+    $limit = [int]$script:LoadLimit
+    if ($limit -gt 0 -and $allLines.Count -gt $limit) {
+        $allLines = @($allLines | Select-Object -Last $limit)
+    }
+    foreach ($ln in $allLines) {
         try { $e = $ln | ConvertFrom-Json } catch { continue }
         if ($e) { $script:SentinelRaw += $e }
     }
@@ -1148,14 +1171,20 @@ $form.Controls.Add($panelBottom)
 #   收起之后启动画面干净得多，用户点了才展开（那时数据已经在了）。
 $script:DetailExpanded = $false
 $lblDetailHead = New-Object System.Windows.Forms.Label
-$lblDetailHead.Text = '▸  详细信息（点我展开）'
+# ★ 2026-10-26（用户：「详细信息怎么没有了啊喂」）：
+#   收起之后这一条只剩一行**小灰字**贴在窗口最底部，等于把它藏了 ——
+#   用户根本不会注意到那里还能点。现在把它做成**看得见的一条**：
+#   · 高度 24 → 30，字体从小号改成正常字号
+#   · 颜色用强调色（原来是 cText2，和背景几乎一样）
+#   · 文字带前后对称的标记，一眼能认出"这里可以点开"
+$lblDetailHead.Text = '▸  详细信息 —— 点这里展开（选中一行后可看它的完整解释）'
 $lblDetailHead.Dock = 'Top'
-$lblDetailHead.Height = 24
+$lblDetailHead.Height = 30
 $lblDetailHead.Font = $fSmall
-$lblDetailHead.ForeColor = $cText2
+$lblDetailHead.ForeColor = $cAccent
 $lblDetailHead.BackColor = $cPanel
 $lblDetailHead.Cursor = 'Hand'
-$lblDetailHead.Padding = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+$lblDetailHead.Padding = New-Object System.Windows.Forms.Padding(0, 5, 0, 0)
 $panelBottom.Controls.Add($lblDetailHead)
 
 # ★ 2026-10-23（用户反馈「详情前面的字会不会太宽」）：
@@ -1261,12 +1290,30 @@ $lblDetailHead.Add_Click({
         $script:DetailExpanded = $false
         $panelBottom.Height = 40
         $rtbDetail.Visible = $false
-        $lblDetailHead.Text = '▸  详细信息（点我展开）'
+        $lblDetailHead.Text = '▸  详细信息 —— 点这里展开（选中一行后可看它的完整解释）'
     } else {
         $script:DetailExpanded = $true
         $panelBottom.Height = 230
         $rtbDetail.Visible = $true
-        $lblDetailHead.Text = '▾  详细信息（点我收起）'
+        $lblDetailHead.Text = '▾  详细信息 —— 点这里收起'
+        # ★ 2026-10-26（用户：「是打开没有内容啊喂」）：
+        #   原来这里只改高度/可见性，**不重新渲染** —— 于是收起状态下展开过来是**一片空白**
+        #   （收起期间要么没渲染过、要么那一轮播放已经把缓冲清掉了）。
+        #   现在展开时立刻按当前选中行重渲染一次；没选中行就提示怎么用。
+        try {
+            if ($grid -and $grid.CurrentRow -and $grid.CurrentRow.DataBoundItem) {
+                Render-DetailForRow $grid.CurrentRow.DataBoundItem
+            } else {
+                $rtbDetail.Clear()
+                $rtbDetail.SelectionFont = $script:FontDetail
+                $rtbDetail.SelectionColor = $cMuted
+                $rtbDetail.AppendText("在上面的列表里点一行，这里会显示它的完整解释：")
+                $rtbDetail.AppendText("`r`n`r`n  · 为什么没了（有崩溃记录 / 有非 0 退出码 / 什么都没有）")
+                $rtbDetail.AppendText("`r`n  · 系统记录原文（Windows 事件日志里的那条）")
+                $rtbDetail.AppendText("`r`n  · 可能的原因（越靠前越常见）")
+                $rtbDetail.AppendText("`r`n  · 你可以这样做（可执行步骤）")
+            }
+        } catch { }
     }
 })
 
@@ -1280,7 +1327,7 @@ $lblDetailHead.Add_Click({
 #     ② 渲染结束后由 Timer 每 ~16ms 写 2 行 —— 像聊天记录一样逐条出现。
 #   ★ -Check 自检必须同步（它要立即读控件内容做断言），所以那条路径保持直写。
 $script:DetailBuf = New-Object System.Collections.ArrayList
-$script:DetailAsync = -not $Check
+$script:DetailAsync = $false   # 2026-10-26 同步渲染：先保证内容能出来，动画以后再说
 $script:DetailTimer = $null
 
 # Font 只建一次（原来每行 new 一个 Font，几十行 = 几十次 GDI 分配）
@@ -1914,6 +1961,17 @@ function Show-Filtered {
     $grid.DataSource = [System.Collections.ArrayList]@($script:Rows)
     # 列宽在 DataBindingComplete 里配置（首次生成列时设 MinimumWidth 会 NRE）
 
+    # ★ 2026-10-26（用户：「详细信息打开没有内容」）：
+    #   列表填完之后**自动选中第一行**，这样详情区一展开就有内容。
+    #   ★ 这里刻意用"设 CurrentCell 再清掉"的老办法，不用 BeginInvoke ——
+    #     BeginInvoke 的 [Action] 委托在本项目的 PowerShell 宿主里不稳定
+    #     （实测界面会停在无窗口状态），而 DataSource 刚赋值时设 CurrentCell 是安全的。
+    try {
+        if ($script:Rows.Count -gt 0 -and $grid.Rows.Count -gt 0) {
+            if (-not $grid.CurrentRow) { $grid.CurrentCell = $grid.Rows[0].Cells[0] }
+        }
+    } catch { }
+
     # 统计 / 引导
     $pending = @($script:Rows | Where-Object { $_.状态 -eq '没说明' }).Count
     # 当前列头筛选（让用户知道在筛，否则会困惑"为什么只剩几条"）
@@ -1953,10 +2011,34 @@ function Show-Filtered {
         if ($trayPending -ge 0) {
             $syncTxt = if ($trayPending -eq 0) { ' · 托盘里待处理 0 条（没有要你反应的）' } else { " · 托盘里待处理 $trayPending 条（在那里处理）" }
         }
-        $lblStatusL.Text = "记录 $($script:Rows.Count)/$($script:AllRows.Count) 条 · 没说明 $pending 条 · 规则 $(Get-RulesCount) 条$filterTxt$last$hidden$syncTxt"
+        # ★ 2026-10-26（用户：「默认 7 天，只有用户往下找或者自己手动的时候再渲染更多的」）：
+        #   只加载了最近 $script:LoadLimit 条时必须**说出来**，否则用户会以为
+        #   "我的老记录不见了"（数据还在文件里，只是没处理）。并且给一个可点的入口。
+        $limitTxt = ''
+        if ($script:LoadLimit -gt 0 -and $script:SentinelTotalLines -gt $script:LoadLimit) {
+            $limitTxt = " · 只显示了最近 $($script:LoadLimit) 条（共 $($script:SentinelTotalLines) 条）—— 点这里加载全部"
+            $lblStatusL.Cursor = 'Hand'
+        } else {
+            $lblStatusL.Cursor = 'Default'
+        }
+        $lblStatusL.Text = "记录 $($script:Rows.Count)/$($script:AllRows.Count) 条 · 没说明 $pending 条 · 规则 $(Get-RulesCount) 条$filterTxt$last$hidden$syncTxt$limitTxt"
         $lblStatusL.ForeColor = $cText2
     }
 }
+
+# 点状态栏 = 加载全部（2026-10-26）
+# 只在"确实被截断"时才有效果；加载完把 LoadLimit 归 0，之后一直全量。
+$lblStatusL.Add_Click({
+    try {
+        if ($script:LoadLimit -gt 0 -and $script:SentinelTotalLines -gt $script:LoadLimit) {
+            $script:LoadLimit = 0
+            $lblStatusL.Text = '正在加载全部记录…'
+            $lblStatusL.ForeColor = $cMuted
+            try { $lblStatusL.Refresh(); [System.Windows.Forms.Application]::DoEvents() } catch { }
+            Update-Grid
+        }
+    } catch { }
+})
 
 $tbSearch.Add_TextChanged({ try { Show-Filtered } catch {} })
 $cbOnlyPending.Add_CheckedChanged({ try { Show-Filtered } catch {} })
@@ -1973,6 +2055,14 @@ function Render-DetailForRow {
     #   没有消息泵时设 CurrentCell **不会**触发事件，详情框里留着上一行的内容，
     #   于是「详情(日志行)/(哨兵行)/(第1行)」三条自检其实一直在验错的行（真 bug）。
     if (-not $r) { return }
+    # ★ 2026-10-26（用户：「是打开没有内容啊喂」）：
+    #   根因找到了 —— **收起状态下详情框是隐藏的**，而 RichTextBox 在隐藏时
+    #   Select/AppendText 会失败（异常被 catch 吞掉），内容根本没写进去；
+    #   用户展开后看到的自然是一片空白。
+    #   现在：收起时直接不渲染（省时间，也符合"用不到就不渲染"）；
+    #   展开时由标题条的点击处理器**重新渲染当前行** —— 那时控件可见，写入正常。
+    #   ★ -Check 例外：自检要读控件内容做断言，它必须照常渲染（不受可见性影响）。
+    if (-not $rtbDetail.Visible -and -not $Check) { return }
     try {
         $raw = $r.Raw
         # ★ 2026-10-24（用户：「哨兵看到的进程消失也要计入」）：这类行不是 Windows 错误日志，

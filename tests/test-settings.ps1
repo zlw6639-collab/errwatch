@@ -434,6 +434,28 @@ Case 'N 存储页把「保留多久」写在页首，且天数跟着输入框走
     return $p
 }
 
+# ── 帮助页目录（2026-10-26，用户：「做成目录的那种…并且需要详细」）─────────
+Case 'R 帮助页有目录，每个主题都有内容且不出现 markdown 星号' {
+    $p = @()
+    $hf = Join-Path $root 'core\help-topics.ps1'
+    if (-not (Test-Path -LiteralPath $hf)) { return @('core\help-topics.ps1 不存在') }
+    . $hf
+    $names = @($script:EwHelpTopicNames)
+    if ($names.Count -lt 8) { $p += "主题太少（$($names.Count) 个）—— 用户要的是「各种问题」都有" }
+    foreach ($n in $names) {
+        $body = [string]$script:EwHelpTopics[$n]
+        if ($body.Trim().Length -lt 80) { $p += "主题「$n」内容太少（$($body.Length) 字）" }
+        # Label 不解析 markdown：星号会原样显示出来（用户截图实证过）
+        if ($body -match '\*\*') { $p += "主题「$n」里有 markdown 星号（界面上会原样显示）" }
+    }
+    # 界面侧必须有目录控件 + 切换逻辑
+    $ui = Get-Content -LiteralPath (Join-Path $root 'errwatch-settings-ui.ps1') -Raw -Encoding UTF8
+    if ($ui -notmatch 'helpList = New-Object') { $p += '帮助页没有目录控件（helpList）' }
+    if ($ui -notmatch 'Show-HelpTopic') { $p += '没有按主题切换正文的函数' }
+    if ($ui -notmatch 'EwHelpTopicNames') { $p += '界面没有从 core 读主题名' }
+    return $p
+}
+
 Write-Host '--- H：副本目录引导（P1 第 5 项）---' -ForegroundColor Cyan
 
 Case 'H copyDir 为空时设置页有醒目提示，备份完也会提示固定' {

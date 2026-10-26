@@ -262,11 +262,14 @@ function New-HelpDot([string]$title, [string]$detail, [int]$x, [int]$y) {
     try { $script:uiTip.SetToolTip($l, $detail) } catch { }
     $l.Add_MouseEnter({ try { $this.ForeColor = $cAccent } catch { } })
     $l.Add_MouseLeave({ try { $this.ForeColor = $cMuted } catch { } })
-    # 点击只在说明很长时才弹窗（短说明悬停足够，弹窗反而烦）
+    # ★ 2026-10-26（用户：「并且点击都没有效果」）：
+    #   上一版点击只在说明很长时才弹窗 → 短说明点了毫无反应，用户以为坏了。
+    #   现在：**点击 = 在它下方浮出说明（20 秒后自动消失）**。
+    #   用 ToolTip.Show 手动触发，视觉上仍是"淡淡的一层"，不是模态弹窗。
     $l.Add_Click({
         try {
             $dt = [string]$this.Tag.detail
-            if ($dt.Length -gt 320) { Show-HelpDialog ([string]$this.Tag.title) $dt }
+            $script:uiTip.Show($dt, $this, 0, ($this.Height + 2), 20000)
         } catch { }
     })
     return $l
@@ -278,12 +281,15 @@ function New-LabelWithHelp([string]$text, [string]$title, [string]$detail, [int]
     $lb = New-Object System.Windows.Forms.Label
     $lb.Text = $text
     $lb.ForeColor = $cText
+    # ★ 必须先显式给字体再测量：Label 的默认字体 ≠ 页面主字体（$font），
+    #   用默认字体量出来的宽度偏大 → ? 标离标签很远
+    #   （用户截图：「监视目标   ?」中间还空着约两个字符）。
+    try { $lb.Font = $font } catch { }
     $lb.AutoSize = $true
     $lb.Location = New-Object System.Drawing.Point($x, $y)
-    # 标签宽度要走实际丈量，否则算不准 ? 该放哪
     $w = 0
     try { $w = [System.Windows.Forms.TextRenderer]::MeasureText($text, $lb.Font).Width } catch { $w = $text.Length * 14 }
-    $dot = New-HelpDot $title $detail ($x + $w + 4) ($y + 2)
+    $dot = New-HelpDot $title $detail ($x + $w + 6) ($y + 2)
     return [pscustomobject]@{ label = $lb; dot = $dot }
 }
 function New-Input([int]$x, [int]$y, [int]$w) {
@@ -381,7 +387,7 @@ $pageRecovery.Controls.Add($cmbApp)
 
 $btnRescue = New-Action '⚑ 开始应急救援' 286 444 170
 $pageRecovery.Controls.Add($btnRescue)
-$pageRecovery.Controls.Add((New-Hint '你主动选一个程序去找它的恢复文件；只读，不改也不覆盖任何文件。' 22 470 520))
+$pageRecovery.Controls.Add((New-Hint '你主动选一个程序去找它的恢复文件；只读，不改也不覆盖任何文件。' 22 482 520))
 
 $btnRescue.Add_Click({
     try {
@@ -967,42 +973,16 @@ $pageHelp.BackColor = $cBg
 $pageHelp.Visible = $false
 $body.Controls.Add($pageHelp)
 
+# 帮助正文数据源（core 里，纯数据、可被测试直接 dot-source）
+$helpTopicsFile = Join-Path $root 'core\help-topics.ps1'
+if (Test-Path -LiteralPath $helpTopicsFile) { . $helpTopicsFile }
+if (-not $script:EwHelpTopics) {
+    $script:EwHelpTopics = [ordered]@{ '帮助' = '（帮助内容缺失：core\help-topics.ps1 不在包里）' }
+    $script:EwHelpTopicNames = @('帮助')
+}
 $pageHelp.Controls.Add((New-Title '帮助' 8))
 
-$helpText = @'
-【它是什么】
-  一个只看不动的"报错记录员"。它读 Windows 自己的错误日志和进程退出情况，
-  把技术的东西翻成「发生了什么 / 有多可信 / 下一步做什么 / 该找谁」。
-  它不注入、不改你的程序、不联网、不上传任何东西。
-
-【它会在你电脑上留下什么】
-  · 记录文件：都在这个程序自己的文件夹里（history.jsonl / sentinel-events.jsonl 等）
-  · 崩溃快照（可选，默认关闭）：开了之后崩溃时会把程序内存存一份，放在
-    C:\ProgramData\errwatch\dumps。这是内存转储，可能含你当时在处理的内容，
-    所以默认不开，也建议别人用你的电脑时注意。
-  · 开机自启：两个启动项（看护 + 托盘），卸载时会一并清掉。
-
-【哪些操作会动你的文件】
-  · 「开始应急救援」：只读扫描 + 复制恢复文件，绝不改原件
-  · 「一键删除过时」：真的删 —— 但只删你自己点的，且只在有归属标记的目录里
-  · 其它按钮（刷新/生成修复/看报告）：只读
-  没有"后台偷偷删东西"这种行为。
-
-【托盘在哪儿】
-  Windows 11 默认把新程序的托盘图标放进隐藏区。
-  点任务栏右端的 ^ 展开，把图标拖到外面（或右键设为"始终显示"）就会一直看得见。
-
-【出事该看哪儿】
-  · 主界面底部状态栏：显示本次扫描 / 加载的进展
-  · 设置 → 工具 → 看护健康：看护（哨兵 + 托盘）是否都在跑
-  · errwatch-doctor.ps1：一条命令做完整自检
-  · 最新报告 report-*.md：给懂电脑的人看的那份
-
-【几个诚实的能力边界】
-  · 崩溃快照不保证抓到：杀软/反作弊/程序自带的崩溃处理器可能先接管
-  · 只在监视名单范围内的程序才会被记录；新装的后台程序要崩过一次才被学到
-  · 「已恢复」只说明程序重新跑起来了，不说明崩溃原因查清了
-'@
+# 帮助内容按主题组织（2026-10-26，用户：「可以做成目录的那种 选择那个目录在打开相关的内容 并且需要详细」）
 
 # ★ 2026-10-26（用户截图实证：「帮助没有下拉 不能看到下面的东西」）：
 #   试过两版都不行，最后定在第 ③ 版：
@@ -1014,9 +994,25 @@ $helpText = @'
 #        最可靠的"自动换行 + 撑高"组合，Panel 能正确算出滚动范围。
 #        代价：文字不能拖选复制（RTB 才能）。用户的核心诉求是"能看到下面"，
 #        拿不到滚动的"可选中"没有意义，所以这里选可靠性。
+#
+# ★ 2026-10-26 第四版（用户：「可以做成目录的那种 选择那个目录再打开相关的内容 并且需要详细」）：
+#   改成**左目录、右正文**。内容源在 core\help-topics.ps1（10 个主题，几千字）。
+#   目录用 ListBox（自带滚动），正文用 Label + AutoScroll Panel（同上，滚动可靠）。
+#   正文按主题懒渲染：点哪个主题才填哪个（默认填第一个）。
+$helpList = New-Object System.Windows.Forms.ListBox
+$helpList.Location = New-Object System.Drawing.Point(22, 38)
+$helpList.Size = New-Object System.Drawing.Size(190, 470)
+$helpList.Anchor = 'Top,Bottom,Left'
+$helpList.BackColor = $cInput
+$helpList.ForeColor = $cText
+$helpList.BorderStyle = 'FixedSingle'
+$helpList.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+$helpList.IntegralHeight = $false
+$pageHelp.Controls.Add($helpList)
+
 $helpHost = New-Object System.Windows.Forms.Panel
-$helpHost.Location = New-Object System.Drawing.Point(22, 38)
-$helpHost.Size = New-Object System.Drawing.Size(574, 470)
+$helpHost.Location = New-Object System.Drawing.Point(226, 38)
+$helpHost.Size = New-Object System.Drawing.Size(370, 470)
 $helpHost.Anchor = 'Top,Bottom,Left,Right'
 $helpHost.BackColor = $cBg
 $helpHost.AutoScroll = $true
@@ -1026,7 +1022,7 @@ $lblHelp = New-Object System.Windows.Forms.Label
 $lblHelp.Location = New-Object System.Drawing.Point(0, 0)
 $lblHelp.AutoSize = $true
 # MaximumSize 的宽度固定、高度 0 = 只按宽度换行，高度随内容长
-$lblHelp.MaximumSize = New-Object System.Drawing.Size(548, 0)
+$lblHelp.MaximumSize = New-Object System.Drawing.Size(344, 0)
 $lblHelp.BackColor = $cBg
 $lblHelp.ForeColor = $cText
 $lblHelp.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
@@ -1036,6 +1032,22 @@ $lblHelp.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
 #   用不到的就不该放在启动路径上。将来这段说明变长/页数变多时，这条就不只是原则了。
 $script:HelpRendered = $false
 $helpHost.Controls.Add($lblHelp)
+
+# 点目录 → 换正文（每次只渲染这一个主题）
+function Show-HelpTopic([int]$idx) {
+    try {
+        if ($idx -lt 0 -or $idx -ge $script:EwHelpTopicNames.Count) { return }
+        $name = $script:EwHelpTopicNames[$idx]
+        $body = [string]$script:EwHelpTopics[$name]
+        $lblHelp.Text = $body
+        $helpHost.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($lblHelp.Height + 10))
+        $helpHost.AutoScrollPosition = New-Object System.Drawing.Point(0, 0)
+        $helpHost.PerformLayout()
+    } catch { }
+}
+$helpList.Add_SelectedIndexChanged({
+    try { Show-HelpTopic ([int]$helpList.SelectedIndex) } catch { }
+})
 
 # ── 面板 3：关于 ──────────────────────────────────────────────────────────
 $pageAbout = New-Object System.Windows.Forms.Panel
@@ -1250,12 +1262,15 @@ function Show-Page([string]$key) {
     if ($key -eq 'help' -and -not $script:HelpRendered) {
         $script:HelpRendered = $true
         try {
-            $lblHelp.Text = $helpText
-            # Label 的 AutoSize+MaximumSize 会自己撑高（换行也由它处理）；
-            # 这里只把 Panel 的滚动范围对齐到它的实际高度 —— 不同步的话
-            # Panel 算不出该滚多少，滚动条就不出现。
-            $helpHost.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($lblHelp.Height + 8))
-            $helpHost.PerformLayout()
+            # 填目录（只填一次），再显示第一个主题。
+            # 正文按主题懒渲染：点哪个才填哪个（默认第一个），
+            # 进这一页不会一次性解析全部几千字。
+            $helpList.Items.Clear()
+            foreach ($tn in $script:EwHelpTopicNames) { [void]$helpList.Items.Add($tn) }
+            if ($helpList.Items.Count -gt 0) {
+                $helpList.SelectedIndex = 0
+                Show-HelpTopic 0
+            }
         } catch { }
     }
     foreach ($k in $navButtons.Keys) {
