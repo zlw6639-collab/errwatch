@@ -711,6 +711,21 @@ if (Test-Path -LiteralPath $v8Test) {
 } else {
     Write-Host '  跳过：test-verify-8x.ps1 不存在'
 }
+# ── 服务端口健康（2026-10-26）：进程在跑 ≠ 服务活着 ─────────────────────────
+# 这一条是为了抓「服务假活」——进程还在，但该监听的端口没监听。
+# 真实案例：QQ 机器人 QQ.exe/桥接都在跑、30012 也听着，但 30011 没监听，
+# 机器人 26 小时没回一句话，而哨兵全程沉默（它只看得见进程退出）。
+Write-Host ""
+$spTest = Join-Path $PSScriptRoot 'test-service-port.ps1'
+$spFail = $false
+if (Test-Path -LiteralPath $spTest) {
+    $spExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    $spOut = @(& $spExe -NoProfile -ExecutionPolicy Bypass -File $spTest 2>&1)
+    $spOut | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { $spFail = $true; Write-Host '  ⚠ 服务端口健康 FAIL —— 门禁将判失败' -ForegroundColor Red }
+} else {
+    Write-Host '  跳过：test-service-port.ps1 不存在'
+}
 # 结果写文件（供历史对比）
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $rulesFile = Resolve-CoreAsset 'rules.json' $root
@@ -732,7 +747,7 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot "last-run.json") -Encoding UTF8
 $report | ConvertTo-Json -Compress | Add-Content (Join-Path $PSScriptRoot 'history.jsonl') -Encoding UTF8
 
-if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
+if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
 exit 0
 
 

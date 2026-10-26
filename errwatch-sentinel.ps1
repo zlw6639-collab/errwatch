@@ -1647,6 +1647,23 @@ if ($Status) {
     $s | Add-Member -NotePropertyName integrity -NotePropertyValue $(if ($cov -and $cov.PSObject.Properties['integrity']) { $cov.integrity } else { $null }) -Force
     $oppDoc = Read-Json $stateOpportunity
     $s | Add-Member -NotePropertyName opportunities -NotePropertyValue $(if ($oppDoc -and $oppDoc.PSObject.Properties['apps']) { @($oppDoc.apps | Select-Object -Last 5) } else { @() }) -Force
+    # 端口健康（2026-10-26）：进程在跑但端口没监听 = 服务假活，进程退出检测看不见这一类。
+    # 这里给机器读的字段；人话版在 -Once 分支里。
+    try {
+        $spFile = Join-Path $root 'core\service-port.ps1'
+        if (Test-Path -LiteralPath $spFile) {
+            . $spFile
+            $aliveFn = {
+                param($names)
+                foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+                    $n = [string]$p.ProcessName
+                    foreach ($m in @($names)) { if ($m -and (($m -ieq $n) -or ($m -ieq "$n.exe"))) { return $true } }
+                }
+                return $false
+            }
+            $s | Add-Member -NotePropertyName serviceHealth -NotePropertyValue @(Get-ErrwatchServiceHealth -Watch @($cfg.watch) -IsProcessAlive $aliveFn) -Force
+        }
+    } catch { }
     $s | ConvertTo-Json -Depth 8
     exit 0
 }
@@ -1676,6 +1693,37 @@ if ($Once) {
         }
         $st = Get-Status
         Write-Host "健康：心跳 $($st.lastHeartbeat)　监视 $($st.watched) 个进程　累计事件 $($st.eventsTotal)" -ForegroundColor DarkGray
+
+        # ── 端口健康（2026-10-26）────────────────────────────────────────
+        # 为什么加这一段：哨兵只看得见「进程退出」。有一类故障它完全看不见 ——
+        # **进程还活着，可它该监听的端口没有监听**（服务假活）。
+        # 真实例子：QQ 机器人 QQ.exe 在跑、桥接在跑、30012 也在监听，但 30011 没监听
+        # → NapCat 没注入 → 机器人 26 小时没回一句话，而哨兵全程沉默。
+        # 这里先在 -Status 里让它可见；主动告警（进待处理/弹提醒）要动事件体系，下一步再做。
+        try {
+            $spFile = Join-Path $root 'core\service-port.ps1'
+            if (Test-Path -LiteralPath $spFile) {
+                . $spFile
+                $aliveFn = {
+                    param($names)
+                    $procs = @(Get-Process -ErrorAction SilentlyContinue)
+                    foreach ($p in $procs) {
+                        $n = [string]$p.ProcessName
+                        foreach ($m in @($names)) {
+                            if ($m -and (($m -ieq $n) -or ($m -ieq "$n.exe"))) { return $true }
+                        }
+                    }
+                    return $false
+                }
+                $health = Get-ErrwatchServiceHealth -Watch @($cfg.watch) -IsProcessAlive $aliveFn
+                foreach ($line in (Format-ErrwatchServiceHealth -Health $health)) {
+                    $color = if ($line -match '端口失守|✗') { 'Yellow' } else { 'DarkGray' }
+                    Write-Host $line -ForegroundColor $color
+                }
+            }
+        } catch {
+            Write-Host "  端口健康查不了：$($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
     }
     exit 0
 }
