@@ -17,6 +17,8 @@ history.jsonl
 last-check.json
 last-run.json
 last-success.json
+# 2026-10-26：每次双击「报错看护」追加一行引导审计（谁把谁拉起来的）
+launch.log
 opportunity.json
 sentinel-coverage.json
 sentinel-dumplink.jsonl

@@ -39,7 +39,11 @@ $script:EwStateFileNames = @(
     #   内容含本机事件主题与规则指纹 —— 和 tray-fallback 同一类，绝不能进包。
     'diagnosis-traces.jsonl',
     # 用户设置（覆盖层）：用户自己的东西，改了不该让基线变红，也不该发给别人
-    'settings.json'
+    'settings.json',
+    # ★ 2026-10-26（新增 errwatch-launch.ps1 时补的）：每次双击「报错看护」都会追加一行
+    #   "这次是谁把谁拉起来的"。它现在靠白名单挡着（.log 默认不进包），但那属于"恰好没漏"——
+    #   哪天有人给某项 .log 开白名单就会一起漏出去。显式写进名单，不留这个口子。
+    'launch.log'
 )
 
 # ── 发行包里的 glob 排除（只对 pack 生效；baseline 按扩展名白名单，本来就不收这些）──

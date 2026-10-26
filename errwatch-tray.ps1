@@ -40,7 +40,54 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$stateDir      = if ($StateDir) { $StateDir } else { $root }
+
+# ── 单实例保护（2026-10-26，用户：「启动快捷方式但托盘不会自己启动」）────────
+# 为什么必须有：下面要加「双击界面时顺带把托盘带起来」的引导逻辑，
+# 而托盘此前**没有任何实例检查** —— 它用的那把 Mutex 是 `errwatch-acks-write`（写 ACK 的），
+# 不是实例锁。没有这一条，引导逻辑一跑就在托盘区堆出两个图标。
+#
+# ★ 锁名必须**按状态目录区分**（2026-10-26 实测踩到）：
+#   第一版用的是固定名 `Local\errwatch-tray-instance`。结果 test-tray 用 `-StateDir <临时目录>`
+#   起独立实例时，被**生产正在跑的那个托盘**挡在门外直接退出 —— 用例 L 因此变红
+#   （报"找不到 tray-acks.jsonl"，其实是测试托盘压根没跑起来）。
+#   那不是测试写得不对：**不同状态目录本来就是两个互不相干的实例**
+#   （各自的 pending / acks / settings），把它们当成"同一个实例"是判据错了。
+#   现在把状态目录的哈希拼进锁名：生产用默认目录，测试用临时目录，互不干扰。
+#   -Check 是自检，不参与（不能因为跑一次自检就把正在用的托盘挤掉）。
+$stateDir = if ($StateDir) { $StateDir } else { $root }
+$script:trayMutex = $null
+if (-not $Check) {
+    $lockName = 'Local\errwatch-tray-instance'
+    try {
+        # 归一化路径（大小写/尾斜杠不影响判定），取 16 位 SHA256 做锁名后缀
+        $norm = ''
+        try { $norm = [System.IO.Path]::GetFullPath($stateDir).TrimEnd('\').ToLowerInvariant() } catch { $norm = "$stateDir".ToLowerInvariant() }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $hash = [BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($norm))).Replace('-', '').Substring(0, 16)
+        $sha.Dispose()
+        $lockName = "Local\errwatch-tray-instance-$hash"
+    } catch { }
+
+    $gotInstance = $false
+    try {
+        $script:trayMutex = New-Object System.Threading.Mutex($false, $lockName)
+        try { $gotInstance = $script:trayMutex.WaitOne(0) }
+        catch [System.Threading.AbandonedMutexException] { $gotInstance = $true }   # 上个托盘崩了，锁已归我们
+        if (-not $gotInstance) { exit 0 }     # 同一状态目录已有托盘：静默退出
+    } catch {
+        # 拿不到 Mutex（受限环境）→ 退回按进程判断，绝不做成"两个都起"
+        $script:trayMutex = $null
+        $procHostPath = Join-Path $root 'core\proc-host.ps1'
+        if (Test-Path -LiteralPath $procHostPath) {
+            try {
+                . $procHostPath
+                $others = @(Get-ErrwatchHostProcesses -Root $root -Role 'tray' | Where-Object { $_.ProcessId -ne $PID })
+                if ($others.Count -gt 0) { exit 0 }
+            } catch { }
+        }
+    }
+}
+
 $statePending  = Join-Path $stateDir 'sentinel-pending.json'
 $stateCoverage = Join-Path $stateDir 'sentinel-coverage.json'
 $acksFile      = Join-Path $stateDir 'tray-acks.jsonl'

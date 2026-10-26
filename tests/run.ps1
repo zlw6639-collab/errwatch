@@ -741,6 +741,20 @@ if (Test-Path -LiteralPath $npTest) {
 } else {
     Write-Host '  跳过：test-notify-policy.ps1 不存在'
 }
+# ── 一键引导（2026-10-26）：双击快捷方式 = 三条腿都起来 ─────────────────────
+# 用户原话：「我启动 报错看护.lnk 但是托盘不会自己启动哇 我们的策略是什么呢」
+# 原来桌面快捷方式只启界面，于是「界面看着正常、其实没在看护」—— 与服务假活同类。
+Write-Host ""
+$lcTest = Join-Path $PSScriptRoot 'test-launch.ps1'
+$lcFail = $false
+if (Test-Path -LiteralPath $lcTest) {
+    $lcExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    $lcOut = @(& $lcExe -NoProfile -ExecutionPolicy Bypass -File $lcTest 2>&1)
+    $lcOut | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { $lcFail = $true; Write-Host '  ⚠ 一键引导 FAIL —— 门禁将判失败' -ForegroundColor Red }
+} else {
+    Write-Host '  跳过：test-launch.ps1 不存在'
+}
 # 结果写文件（供历史对比）
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $rulesFile = Resolve-CoreAsset 'rules.json' $root
@@ -762,7 +776,7 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot "last-run.json") -Encoding UTF8
 $report | ConvertTo-Json -Compress | Add-Content (Join-Path $PSScriptRoot 'history.jsonl') -Encoding UTF8
 
-if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
+if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $lcFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
 exit 0
 
 
