@@ -68,7 +68,14 @@ Case '8.1b 现场有报告：最新那份能读出内容，且存在带 §1 的�
     $p = @()
     $reports = @(Get-ChildItem -LiteralPath $root -Filter 'report-*.md' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending)
-    if ($reports.Count -eq 0) { return @('目录里一份报告都没有（先扫一次再验）') }
+    # ★ 2026-10-26（P2 同批）：干净 clone / 新装机器上**一份报告都没有是正常状态**，
+    #   本用例验的是「有报告时能读得出内容」。原来这里直接判红，于是陌生人 clone 后
+    #   跑单测永远看到一条无解的红（只能先去界面扫一次），把「可被外部验证」变成「得先懂内部流程」。
+    #   现在判 SKIP：有数据时下面三条断言照旧严格。
+    if ($reports.Count -eq 0) {
+        Write-Host '         [SKIP] 现场没有任何 report-*.md（干净 clone / 新装机器属正常）—— 先在界面里扫一次再跑这条' -ForegroundColor DarkGray
+        return @()
+    }
     $latest = $reports[0]
     $txt = Get-Content -LiteralPath $latest.FullName -Encoding UTF8 -Raw
     if (-not $txt -or $txt.Length -lt 50) { $p += "最新报告内容异常（$(if ($txt) { $txt.Length } else { 0 }) 字符）" }
