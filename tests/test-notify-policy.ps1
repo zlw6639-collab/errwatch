@@ -254,6 +254,49 @@ Case 'L 弹窗设置页有超时提醒的两项，且与时限页同源' {
     $p
 }
 
+# ── 改完设置立刻生效（2026-10-26 用户：「关了超时处理提示 它还在疯狂弹」）──────────
+# 真根因：**托盘只在启动时读一次设置**。实测证据：settings.json 修改 22:14:42，
+# 托盘进程启动 21:40:45 —— 中间 34 分钟每轮循环都用旧配置（overdue 还当 true），
+# 用户于是在界面里"关掉"了却一直被打扰，直到托盘重启。
+# 判定不能只测函数（Test-ErrwatchShouldNotifyOverdue 一直是对的），
+# 必须测「改完设置，正在跑的托盘会不会重读」—— 这一条只能看实现。
+Case 'M 托盘热重载设置（改完立刻生效，不必重启托盘）' {
+    $p = @()
+    $tray = Join-Path $root 'errwatch-tray.ps1'
+    if (-not (Test-Path -LiteralPath $tray)) { return @('缺少 errwatch-tray.ps1') }
+    $src = Get-Content -LiteralPath $tray -Raw -Encoding UTF8
+
+    # ① 读取必须抽成函数（只有一处真源，热重载才能复用同一份逻辑）
+    if ($src -notmatch 'function Read-NotifySettings') { $p += '设置读取没有抽成函数 —— 热重载会变成第二份逻辑' }
+    # ② 必须盯 settings.json 的修改时间
+    if ($src -notmatch 'settings\.json') { $p += '托盘没有盯 settings.json' }
+    if ($src -notmatch 'LastWriteTimeUtc') { $p += '没有比较修改时间（无法判断设置变没变）' }
+    if ($src -notmatch '\$cfgStamp') { $p += '没有记住上一次读到的版本（$cfgStamp）' }
+    # ③ 重载后必须把五个变量都更新（漏一个就会出现"改了一半生效"）
+    $idx = $src.IndexOf('notify-settings-reloaded')
+    if ($idx -lt 0) { $p += '重载没有留痕（tray-events.log 里看不到，出问题无法证明它执行过）' }
+    else {
+        $blk = $src.Substring([Math]::Max(0, $idx - 1600), [Math]::Min(1800, $src.Length - [Math]::Max(0, $idx - 1600)))
+        foreach ($v in '$notifyMode', '$notifyOverdueEnabled', '$notifySeconds', '$deadlineMinutes') {
+            if ($blk -notmatch [regex]::Escape($v) + '\s*=') { $p += "重载时没有更新 $v（改了这项不会生效）" }
+        }
+    }
+    # ④ 重载必须发生在主循环里（不是启动时读一次就算了）
+    #   ★ 判据不能用「$cfgStamp 首次出现的位置」—— 它在启动段就被初始化过一次，
+    #     那样必然误判（第一版就是这么红的）。要看**比较语句**的位置，
+    #     以及 Read-NotifySettings 被调用几次（启动 + 循环重读 = 至少 2 次）。
+    $loopIdx = $src.IndexOf('while ((Get-Date) -lt $deadline)')
+    if ($loopIdx -lt 0) { $p += '找不到主循环（结构变了，这条守卫要重写）' }
+    else {
+        $cmpIdx = $src.IndexOf('$setStamp -ne $cfgStamp')
+        if ($cmpIdx -lt 0) { $p += '没有时间戳比较语句（$setStamp -ne $cfgStamp）' }
+        elseif ($cmpIdx -lt $loopIdx) { $p += '时间戳比较在主循环之前 —— 那只会在启动时判一次' }
+        $calls = ([regex]::Matches($src, '\$cfg = Read-NotifySettings')).Count
+        if ($calls -lt 2) { $p += "Read-NotifySettings 只被调用 $calls 次（应该：启动一次 + 循环里重读）" }
+    }
+    return $p
+}
+
 Write-Host ''
 if ($fail -eq 0) {
     Write-Host ("通知策略：{0}/{0} 全部通过" -f $pass) -ForegroundColor Green

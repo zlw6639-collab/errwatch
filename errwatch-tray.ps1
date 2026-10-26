@@ -143,30 +143,61 @@ $notifySeconds = 8
 $notifyMode = 'important'
 $notifyWhitelist = @()
 $notifyOverdueEnabled = $true
-if (Get-Command Get-ErrwatchSettings -ErrorAction SilentlyContinue) {
+# ★ 2026-10-26（用户：「我关闭了超时处理提示 它还在疯狂弹」）—— 真根因：
+#   **托盘只在启动时读一次设置。** 用户在「设置」里改完保存，托盘还拿着旧值继续弹，
+#   一直弹到托盘重启为止。实测证据：
+#     settings.json 修改于 22:14:42，托盘进程启动于 21:40:45 —— 中间 34 分钟里
+#     每一轮循环都用旧配置（notify.overdue.enabled 还当 true），于是「关了还在弹」。
+#   修法：把读取抽成函数，循环里盯 settings.json 的修改时间，变了就重读（幂等）。
+#   这与哨兵热重载 watch 目标是同一套思路 —— 那边有 test-watch-reload 守着，托盘这边一直没有。
+function Read-NotifySettings {
+    $o = [ordered]@{
+        seconds     = 8
+        mode        = 'important'
+        whitelist   = @()
+        overdueOn   = $true
+        deadlineMin = 30
+        fallbackAct = 'notify-only'
+    }
+    if (-not (Get-Command Get-ErrwatchSettings -ErrorAction SilentlyContinue)) { return $o }
     try {
         $stSet = Get-ErrwatchSettings -Root $root
-        $deadlineMinutes = [int]$stSet.autorespond.deadlineMinutes
-        $fallbackAction = [string]$stSet.autorespond.defaultAction
-        if ($stSet.PSObject.Properties['notify'] -and $stSet.notify.seconds) { $notifySeconds = [int]$stSet.notify.seconds }
-        if ($stSet.PSObject.Properties['notify']) {
-            if ($stSet.notify.PSObject.Properties['mode'] -and $stSet.notify.mode) { $notifyMode = ([string]$stSet.notify.mode).ToLowerInvariant() }
-            if ($stSet.notify.PSObject.Properties['whitelist'] -and $null -ne $stSet.notify.whitelist) { $notifyWhitelist = @($stSet.notify.whitelist) }
+        $o.deadlineMin = [int]$stSet.autorespond.deadlineMinutes
+        $o.fallbackAct = [string]$stSet.autorespond.defaultAction
+        if ($stSet.PSObject.Properties['notify'] -and $stSet.notify) {
+            if ($stSet.notify.PSObject.Properties['seconds'] -and $stSet.notify.seconds) { $o.seconds = [int]$stSet.notify.seconds }
+            if ($stSet.notify.PSObject.Properties['mode'] -and $stSet.notify.mode) { $o.mode = ([string]$stSet.notify.mode).ToLowerInvariant() }
+            if ($stSet.notify.PSObject.Properties['whitelist'] -and $null -ne $stSet.notify.whitelist) { $o.whitelist = @($stSet.notify.whitelist) }
             # 超时提醒（2026-10-26 第二版）：开关 + 过期分钟数
             if ($stSet.notify.PSObject.Properties['overdue'] -and $stSet.notify.overdue) {
-                if ($stSet.notify.overdue.PSObject.Properties['enabled']) { $notifyOverdueEnabled = [bool]$stSet.notify.overdue.enabled }
+                if ($stSet.notify.overdue.PSObject.Properties['enabled']) { $o.overdueOn = [bool]$stSet.notify.overdue.enabled }
                 if ($stSet.notify.overdue.PSObject.Properties['minutes'] -and $stSet.notify.overdue.minutes) {
-                    $deadlineMinutes = [int]$stSet.notify.overdue.minutes
+                    $o.deadlineMin = [int]$stSet.notify.overdue.minutes
                 }
             }
         }
     } catch { }
+    if (@('all', 'important', 'whitelist', 'none') -notcontains $o.mode) { $o.mode = 'important' }
+    # 再过一次白名单：配置被手工改成奇怪值也不会被放行（契约 §十一）
+    if (Get-Command Test-ErrwatchFallbackActionAllowed -ErrorAction SilentlyContinue) {
+        if (-not (Test-ErrwatchFallbackActionAllowed $o.fallbackAct)) { $o.fallbackAct = 'notify-only' }
+    }
+    return $o
 }
-if (@('all', 'important', 'whitelist', 'none') -notcontains $notifyMode) { $notifyMode = 'important' }
-# 再过一次白名单：配置被手工改成奇怪值也不会被放行（契约 §十一）
-if (Get-Command Test-ErrwatchFallbackActionAllowed -ErrorAction SilentlyContinue) {
-    if (-not (Test-ErrwatchFallbackActionAllowed $fallbackAction)) { $fallbackAction = 'notify-only' }
-}
+
+$cfg = Read-NotifySettings
+$notifySeconds = [int]$cfg.seconds
+$notifyMode = [string]$cfg.mode
+$notifyWhitelist = @($cfg.whitelist)
+$notifyOverdueEnabled = [bool]$cfg.overdueOn
+$deadlineMinutes = [int]$cfg.deadlineMin
+$fallbackAction = [string]$cfg.fallbackAct
+# 热重载用：记住这次读到的是哪一版 settings.json
+$cfgStamp = [datetime]::MinValue
+try {
+    $setFile0 = Join-Path $root 'settings.json'
+    if (Test-Path -LiteralPath $setFile0) { $cfgStamp = (Get-Item -LiteralPath $setFile0).LastWriteTimeUtc }
+} catch { }
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1126,6 +1157,34 @@ try {
                         $line = [ordered]@{ at = (Get-Date).ToString('o'); pid = $PID; event = 'remount-on-request' } | ConvertTo-Json -Compress
                         Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $line -Encoding UTF8
                     } catch { }
+                }
+            } catch { }
+
+            # ★ 设置热重载（2026-10-26，用户：「关了超时提示 它还在疯狂弹」）：
+            #   用户改完设置**立刻**生效，不必重启托盘。判据只看 settings.json 的修改时间戳，
+            #   变了就整份重读 —— 与哨兵热重载 watch 同一套做法（那边有 test-watch-reload 守着）。
+            try {
+                $setFile = Join-Path $root 'settings.json'
+                if (Test-Path -LiteralPath $setFile) {
+                    $setStamp = (Get-Item -LiteralPath $setFile).LastWriteTimeUtc
+                    if ($setStamp -ne $cfgStamp) {
+                        $cfgStamp = $setStamp
+                        $cfg = Read-NotifySettings
+                        $notifySeconds = [int]$cfg.seconds
+                        $notifyMode = [string]$cfg.mode
+                        $notifyWhitelist = @($cfg.whitelist)
+                        $notifyOverdueEnabled = [bool]$cfg.overdueOn
+                        $deadlineMinutes = [int]$cfg.deadlineMin
+                        $fallbackAction = [string]$cfg.fallbackAct
+                        try {
+                            $line = [ordered]@{
+                                at = (Get-Date).ToString('o'); pid = $PID; event = 'notify-settings-reloaded'
+                                mode = $notifyMode; overdue = $notifyOverdueEnabled
+                                seconds = $notifySeconds; deadlineMinutes = $deadlineMinutes
+                            } | ConvertTo-Json -Compress
+                            Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $line -Encoding UTF8
+                        } catch { }
+                    }
                 }
             } catch { }
 
