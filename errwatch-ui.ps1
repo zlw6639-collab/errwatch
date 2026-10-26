@@ -134,6 +134,11 @@ if (Test-Path -LiteralPath $ewEnginePath) { . $ewEnginePath }
 $ewSentinelViewPath = Join-Path $PSScriptRoot 'core\sentinel-view.ps1'
 if (Test-Path -LiteralPath $ewSentinelViewPath) { . $ewSentinelViewPath }
 
+# 默认显示多少 / 点一下加载什么（2026-10-26）：唯一实现在 core\ui-window.ps1，
+# 可单测（tests\test-ui-window.ps1）。这里只负责用它。
+$ewUiWindowPath = Join-Path $PSScriptRoot 'core\ui-window.ps1'
+if (Test-Path -LiteralPath $ewUiWindowPath) { . $ewUiWindowPath }
+
 function Get-PsExe {
     $c = Get-Command pwsh -ErrorAction SilentlyContinue
     $p5 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -198,19 +203,26 @@ function Get-AppDisplayName([string]$Exe) {
 # ★ 2026-10-25（F 场景「畸形 JSONL」）：坏行必须被**计数**，不能只是悄悄跳过。
 #   逐行 try/catch 是对的（一行坏的不能毁掉整张表），但「跳过了几行」没说出口时，
 #   文件被写坏的表现就只是「历史记录变少了」—— 用户和我们都看不出来。
-# ★ 2026-10-26：默认只处理最近多少条哨兵事件（0 = 全部）。
-#   1800 行的实测：处理全部约 3.4 秒，只处理 500 条约 0.9 秒。
-#   用户一眼只看得见十几行，没必要为看不见的行付启动时间。
+# ★ 2026-10-26：主界面默认显示范围（0 = 不限）。
+#   用户原话：「不需要一来就渲染全部的崩溃条目 默认 7 天 不要全部时间，
+#   只有用户往下找或者自己手动的时候再渲染更多的」。
+#   WindowDays = 时间窗口（默认 7 天），LoadLimit = 条数上限（默认 500）。
+#   两者都从设置读（设置 →「显示与加载」可改），点状态栏逐档放宽（core\ui-window.ps1）。
+#   实测 3966 行：全量逐条算状态 3.5 秒，只处理窗口内的约 0.9 秒。
+$script:WindowDays = 7
 $script:LoadLimit = 500
+try {
+    $__ui = (Get-ErrwatchSettings -Root $script:Root).ui
+    if ($__ui) {
+        if ($null -ne $__ui.windowDays) { $script:WindowDays = [int]$__ui.windowDays }
+        if ($null -ne $__ui.pageSize) { $script:LoadLimit = [int]$__ui.pageSize }
+    }
+} catch { }
 $script:SentinelTotalLines = 0
+$script:SentinelWindow = $null
 $script:HistBadLines = 0
 function Get-HistoryRows {
-    if (-not (Test-Path $HistFile)) { # ★ 2026-10-26：默认只处理最近多少条哨兵事件（0 = 全部）。
-#   1800 行的实测：处理全部约 3.4 秒，只处理 500 条约 0.9 秒。
-#   用户一眼只看得见十几行，没必要为看不见的行付启动时间。
-$script:LoadLimit = 500
-$script:SentinelTotalLines = 0
-$script:HistBadLines = 0; return @() }
+    if (-not (Test-Path $HistFile)) { return @() }
     $rows = @()
     $bad = 0
     # ★ 5.1 下 Get-Content 默认按系统 ANSI(GBK) 读，而 history.jsonl 是 UTF-8 → 乱码。
@@ -287,15 +299,23 @@ function Get-SentinelRows {
     #   或者自己手动的时候再渲染更多的」）：
     #   这是启动那 3.5 秒的**真正大头** —— 把 3800 条事件全部读进来、逐条算出
     #   状态和人话。而用户一眼只看得见十几行。
-    #   现在：默认只取**文件末尾的最近 N 条**（文件是按时间追加的，末尾就是最新的），
-    #   剩下的等用户点状态栏的「加载全部」再处理。
-    #   ★ 只取尾部而不是"取前 N 条"：前 N 条是**最旧**的，用户想看的是最近的。
+    #   选哪些行由 core\ui-window.ps1 决定（时间窗口 7 天 + 条数上限 500，取文件末尾），
+    #   那套逻辑有单测守着：取末尾不是取开头、坏行不许吞、点一次必须真的更多。
     $allLines = @(Get-Content -LiteralPath $path -Encoding UTF8 -ErrorAction SilentlyContinue |
         Where-Object { $_.Trim() })
     $script:SentinelTotalLines = $allLines.Count
-    $limit = [int]$script:LoadLimit
-    if ($limit -gt 0 -and $allLines.Count -gt $limit) {
-        $allLines = @($allLines | Select-Object -Last $limit)
+    $script:SentinelWindow = $null
+    if (Get-Command Select-ErrwatchEventWindow -ErrorAction SilentlyContinue) {
+        $win = Select-ErrwatchEventWindow -Lines $allLines -WindowDays ([int]$script:WindowDays) `
+            -MaxRows ([int]$script:LoadLimit) -Now (Get-Date)
+        $allLines = @($win.Lines)
+        $script:SentinelWindow = $win
+    } else {
+        # 缺 core/ui-window.ps1 时退回老行为：只取末尾 N 条（界面不能因为缺文件就打不开）
+        $limit = [int]$script:LoadLimit
+        if ($limit -gt 0 -and $allLines.Count -gt $limit) {
+            $allLines = @($allLines | Select-Object -Last $limit)
+        }
     }
     foreach ($ln in $allLines) {
         try { $e = $ln | ConvertFrom-Json } catch { continue }
@@ -2012,31 +2032,41 @@ function Show-Filtered {
             $syncTxt = if ($trayPending -eq 0) { ' · 托盘里待处理 0 条（没有要你反应的）' } else { " · 托盘里待处理 $trayPending 条（在那里处理）" }
         }
         # ★ 2026-10-26（用户：「默认 7 天，只有用户往下找或者自己手动的时候再渲染更多的」）：
-        #   只加载了最近 $script:LoadLimit 条时必须**说出来**，否则用户会以为
-        #   "我的老记录不见了"（数据还在文件里，只是没处理）。并且给一个可点的入口。
+        #   现在显示**什么范围**必须一直说出来，否则用户会以为"我的老记录不见了"
+        #   （数据还在文件里，只是没一次性搬进表格）。被截断时给一个可点的入口。
+        #   文案由 core\ui-window.ps1 的 Get-ErrwatchWindowLabel 统一生成（有单测）。
         $limitTxt = ''
-        if ($script:LoadLimit -gt 0 -and $script:SentinelTotalLines -gt $script:LoadLimit) {
-            $limitTxt = " · 只显示了最近 $($script:LoadLimit) 条（共 $($script:SentinelTotalLines) 条）—— 点这里加载全部"
-            $lblStatusL.Cursor = 'Hand'
-        } else {
-            $lblStatusL.Cursor = 'Default'
+        $win = $script:SentinelWindow
+        if ($win -and (Get-Command Get-ErrwatchWindowLabel -ErrorAction SilentlyContinue)) {
+            try {
+                $limitTxt = ' · ' + (Get-ErrwatchWindowLabel -WindowDays $win.WindowDays -MaxRows $win.MaxRows `
+                    -Total $win.Total -Shown $win.Used)
+            } catch { $limitTxt = '' }
         }
+        if ($win -and $win.Truncated) { $lblStatusL.Cursor = 'Hand' } else { $lblStatusL.Cursor = 'Default' }
         $lblStatusL.Text = "记录 $($script:Rows.Count)/$($script:AllRows.Count) 条 · 没说明 $pending 条 · 规则 $(Get-RulesCount) 条$filterTxt$last$hidden$syncTxt$limitTxt"
         $lblStatusL.ForeColor = $cText2
     }
 }
 
-# 点状态栏 = 加载全部（2026-10-26）
-# 只在"确实被截断"时才有效果；加载完把 LoadLimit 归 0，之后一直全量。
+# 点状态栏 = 加载更多（2026-10-26 第二版）
+# 阶梯（core\ui-window.ps1 的 Get-ErrwatchNextLoadStep，每一档都有断言真的更多）：
+#   500 条 → 2000 条 → 不限条数 → 不限时间 → 到底（按钮变回普通状态）
+# 上一版只有"一次性加载全部"：从 500 直接跳到 3966 条，等于把用户抱怨的
+# "一来就渲染全部"换个时机又做了一遍 —— 只是从启动时挪到了点击时。
 $lblStatusL.Add_Click({
     try {
-        if ($script:LoadLimit -gt 0 -and $script:SentinelTotalLines -gt $script:LoadLimit) {
-            $script:LoadLimit = 0
-            $lblStatusL.Text = '正在加载全部记录…'
-            $lblStatusL.ForeColor = $cMuted
-            try { $lblStatusL.Refresh(); [System.Windows.Forms.Application]::DoEvents() } catch { }
-            Update-Grid
+        $step = $null
+        if (Get-Command Get-ErrwatchNextLoadStep -ErrorAction SilentlyContinue) {
+            $step = Get-ErrwatchNextLoadStep -WindowDays ([int]$script:WindowDays) -MaxRows ([int]$script:LoadLimit)
         }
+        if (-not $step) { return }   # 已经全部加载完：点了没反应是**对的**，但按钮不该装成可点
+        $script:WindowDays = [int]$step.WindowDays
+        $script:LoadLimit = [int]$step.MaxRows
+        $lblStatusL.Text = "正在$($step.Hint)…"
+        $lblStatusL.ForeColor = $cMuted
+        try { $lblStatusL.Refresh(); [System.Windows.Forms.Application]::DoEvents() } catch { }
+        Update-Grid
     } catch { }
 })
 

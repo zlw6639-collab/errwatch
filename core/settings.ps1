@@ -26,6 +26,8 @@ $script:EwSettingsRanges = @{
     notifySeconds    = @(3, 30)        # 气泡显示时长（太短看不完，太长挡右下角）
     storageKeepDays  = @(1, 365)       # 事件/ACK 保留天数
     storageFileDays  = @(1, 3650)      # 磁盘文件（副本/崩溃快照）保留天数
+    uiWindowDays     = @(0, 3650)      # 主界面默认时间窗口（0 = 全部时间）
+    uiPageSize       = @(0, 100000)    # 主界面默认条数上限（0 = 不限）
 }
 
 # 弹窗策略的合法取值（2026-10-26）。白名单是**封闭**的：写错的模式一律退回默认，
@@ -83,6 +85,14 @@ function Get-ErrwatchSettingsDefaults {
         #   copyDir      = 副本目录；空 = 每次备份都问用户（老行为）
         # 两个天数**分开**：状态数据很小、清早了会丢审计；副本是磁盘大头、清晚了就堆积。
         storage     = [pscustomobject]@{ keepDays = 7; fileKeepDays = 30; copyDir = '' }
+        # 2026-10-26（用户：「不需要一来就渲染全部的崩溃条目 默认 7 天，不要全部时间，
+        #   只有用户往下找或者自己手动的时候再渲染更多的」）：
+        #   主界面默认只看**最近 windowDays 天**里的**最多 pageSize 条**，
+        #   想看更多就点状态栏（loader 在 core\ui-window.ps1，每一档都有断言）。
+        #   两项都可以设 0：windowDays=0 = 全部时间，pageSize=0 = 不限条数。
+        #   ★ 边界：这里只影响**主界面显示多少**，不影响采集、保留、待处理、审计
+        #     —— 老记录还在文件里，只是没一次性搬进表格。
+        ui          = [pscustomobject]@{ windowDays = 7; pageSize = 500 }
     }
 }
 
@@ -360,6 +370,20 @@ function Get-ErrwatchSettings([string]$Root) {
                     # 只接受绝对路径：相对路径会随工作目录漂移，清理时可能删到意想不到的地方
                     if ([System.IO.Path]::IsPathRooted($d)) { $def.storage.copyDir = $d }
                 }
+            }
+        }
+    } catch { }
+
+    # 主界面显示范围（2026-10-26）：天数窗口 + 条数上限，两项各自独立校验
+    try {
+        if ($raw.PSObject.Properties['ui'] -and $raw.ui) {
+            if ($raw.ui.PSObject.Properties['windowDays']) {
+                $v = ConvertTo-ErrwatchSettingNumber $raw.ui.windowDays $script:EwSettingsRanges.uiWindowDays[0] $script:EwSettingsRanges.uiWindowDays[1]
+                if ($null -ne $v) { $def.ui.windowDays = $v }
+            }
+            if ($raw.ui.PSObject.Properties['pageSize']) {
+                $v = ConvertTo-ErrwatchSettingNumber $raw.ui.pageSize $script:EwSettingsRanges.uiPageSize[0] $script:EwSettingsRanges.uiPageSize[1]
+                if ($null -ne $v) { $def.ui.pageSize = $v }
             }
         }
     } catch { }

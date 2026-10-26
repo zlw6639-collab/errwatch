@@ -741,6 +741,21 @@ if (Test-Path -LiteralPath $npTest) {
 } else {
     Write-Host '  跳过：test-notify-policy.ps1 不存在'
 }
+# ── 说明浮层（2026-10-26）：? 提示被退回四次，第四次才看清是 ToolTip 本身 ────────
+# 用户原话：「无法消失 并且换软件了还在显示 图一背景是其他软件」。
+# 守两件事：① 位置贴 ? 底 6px 且四周不越界（"间隔还是很大"）；② 离开必消失、
+# 切页面/失活立即消失（"无法消失"）。这两条都是纯函数，能断言，不该靠用户再截图。
+Write-Host ""
+$htTest = Join-Path $PSScriptRoot 'test-help-tip.ps1'
+$htFail = $false
+if (Test-Path -LiteralPath $htTest) {
+    $htExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    $htOut = @(& $htExe -NoProfile -ExecutionPolicy Bypass -File $htTest 2>&1)
+    $htOut | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { $htFail = $true; Write-Host '  ⚠ 说明浮层 FAIL —— 门禁将判失败' -ForegroundColor Red }
+} else {
+    Write-Host '  跳过：test-help-tip.ps1 不存在'
+}
 # ── 一键引导（2026-10-26）：双击快捷方式 = 三条腿都起来 ─────────────────────
 # 用户原话：「我启动 报错看护.lnk 但是托盘不会自己启动哇 我们的策略是什么呢」
 # 原来桌面快捷方式只启界面，于是「界面看着正常、其实没在看护」—— 与服务假活同类。
@@ -790,7 +805,7 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot "last-run.json") -Encoding UTF8
 $report | ConvertTo-Json -Compress | Add-Content (Join-Path $PSScriptRoot 'history.jsonl') -Encoding UTF8
 
-if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $lcFail -or $wrFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
+if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $htFail -or $lcFail -or $wrFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
 exit 0
 
 

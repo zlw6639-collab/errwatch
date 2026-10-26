@@ -456,6 +456,70 @@ Case 'R 帮助页有目录，每个主题都有内容且不出现 markdown 星�
     return $p
 }
 
+# ── 显示与加载（2026-10-26，用户：「默认 7 天，不要全部时间，只有往下找或手动时才渲染更多」）──
+Case 'V1 显示范围的默认值是 7 天 / 500 条，且 0 是合法值' {
+    $p = @()
+    $s = Get-ErrwatchSettings -Root $tmp
+    if (-not $s.PSObject.Properties['ui'] -or -not $s.ui) { return @('设置里没有 ui 段') }
+    if ([int]$s.ui.windowDays -ne 7) { $p += "默认天数应为 7，实际 $($s.ui.windowDays)" }
+    if ([int]$s.ui.pageSize -ne 500) { $p += "默认条数应为 500，实际 $($s.ui.pageSize)" }
+    # 0 = 全部时间 / 不限条数，必须能存进去（用户想全量看时用得上）
+    $t2 = Join-Path $env:TEMP ('errwatch-ui-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $t2 -Force | Out-Null
+    try {
+        $x = Get-ErrwatchSettings -Root $t2
+        $x.ui.windowDays = 0
+        $x.ui.pageSize = 0
+        [void](Save-ErrwatchSettings -Root $t2 -Settings $x)
+        $back = Get-ErrwatchSettings -Root $t2
+        if ([int]$back.ui.windowDays -ne 0) { $p += "0 天被拒了（读回 $($back.ui.windowDays)）" }
+        if ([int]$back.ui.pageSize -ne 0) { $p += "0 条被拒了（读回 $($back.ui.pageSize)）" }
+    } finally { Remove-Item -LiteralPath $t2 -Recurse -Force -ErrorAction SilentlyContinue }
+    return $p
+}
+
+Case 'V2 越界的显示范围被忽略，不污染其它项（半坏不整体坏）' {
+    $p = @()
+    $t3 = Join-Path $env:TEMP ('errwatch-ui-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $t3 -Force | Out-Null
+    try {
+        # 手写一份坏配置：天数 -5（负）、条数 99999999（超上限）、diagnosis 仍合法
+        $bad = '{"version":1,"ui":{"windowDays":-5,"pageSize":99999999},"diagnosis":{"maxDurationSeconds":900}}'
+        Set-Content -LiteralPath (Join-Path $t3 'settings.json') -Value $bad -Encoding UTF8
+        $s = Get-ErrwatchSettings -Root $t3
+        if ([int]$s.ui.windowDays -ne 7) { $p += "负天数应退回默认 7，实际 $($s.ui.windowDays)" }
+        if ([int]$s.ui.pageSize -ne 500) { $p += "超大条数应退回默认 500，实际 $($s.ui.pageSize)" }
+        if ([int]$s.diagnosis.maxDurationSeconds -ne 900) { $p += '同一份文件里的合法项被连累了' }
+    } finally { Remove-Item -LiteralPath $t3 -Recurse -Force -ErrorAction SilentlyContinue }
+    return $p
+}
+
+Case 'V3 设置窗有「显示与加载」页，两项都回显 + 保存时校验' {
+    $p = @()
+    $src = Get-Content -LiteralPath (Join-Path $root 'errwatch-settings-ui.ps1') -Raw -Encoding UTF8
+    foreach ($need in @("@{ key = 'view'", 'pageView', 'txtViewDays', 'txtViewRows', 'Update-ViewNotice')) {
+        if ($src -notmatch [regex]::Escape($need)) { $p += "设置窗缺少：$need" }
+    }
+    # 保存时两项都必须过区间校验（不许直接写盘）
+    if ($src -notmatch 'EwSettingsRanges\.uiWindowDays') { $p += '保存时没有校验天数区间' }
+    if ($src -notmatch 'EwSettingsRanges\.uiPageSize') { $p += '保存时没有校验条数区间' }
+    # 边界说明必须在页面上（用户最怕「设小了会丢数据」）
+    if ($src -notmatch '不影响采集、保留和待处理') { $p += '页面上缺少「只影响显示、不丢数据」的说明' }
+    return $p
+}
+
+Case 'V4 ? 提示不再用系统 ToolTip（"无法消失 / 换软件仍显示"的根因）' {
+    $p = @()
+    $src = Get-Content -LiteralPath (Join-Path $root 'errwatch-settings-ui.ps1') -Raw -Encoding UTF8
+    if ($src -match 'System\.Windows\.Forms\.ToolTip') { $p += '仍在用系统 ToolTip —— 手动 Show 不受鼠标控制、ShowAlways 会浮在别的软件上' }
+    foreach ($need in @('Show-FloatTip', 'Hide-FloatTip', 'Add_Deactivate', 'TipHideTimer')) {
+        if ($src -notmatch [regex]::Escape($need)) { $p += "缺少自绘浮层的部分：$need" }
+    }
+    # 换页/失活必须收起（用户：「换软件了还在显示」）
+    if ($src -notmatch 'Add_Deactivate\(\{ try \{ Hide-FloatTip') { $p += '窗体失活时没有收起浮层' }
+    return $p
+}
+
 Write-Host '--- H：副本目录引导（P1 第 5 项）---' -ForegroundColor Cyan
 
 Case 'H copyDir 为空时设置页有醒目提示，备份完也会提示固定' {

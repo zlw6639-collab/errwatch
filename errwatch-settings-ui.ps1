@@ -35,6 +35,10 @@ $procHostCore = Join-Path $root 'core\proc-host.ps1'
 if (Test-Path -LiteralPath $procHostCore) { . $procHostCore }
 $engineCore = Join-Path $root 'core\engine.ps1'
 if (Test-Path -LiteralPath $engineCore) { . $engineCore }
+# 说明浮层的几何与时机（2026-10-26）：唯一实现，可单测 ——
+# 位置算错、停留太久这类问题不能靠用户再截图一次才发现。
+$helpTipCore = Join-Path $root 'core\help-tip.ps1'
+if (Test-Path -LiteralPath $helpTipCore) { . $helpTipCore }
 
 if ($Check) {
     $s = Get-ErrwatchSettings -Root $root
@@ -44,6 +48,10 @@ if ($Check) {
     Write-Host "额外救援目录 $n 条"
     $uw = @(Get-ErrwatchWatchExtra -Root $root)
     Write-Host ("手动监视目标 {0} 个" -f $uw.Count)
+    # 显示范围（2026-10-26）：自动化验证要能直接读到，不必开窗口
+    $uDays = 7; $uRows = 500
+    try { if ($s.PSObject.Properties['ui'] -and $s.ui) { $uDays = [int]$s.ui.windowDays; $uRows = [int]$s.ui.pageSize } } catch { }
+    Write-Host ("主界面显示：最近 {0} 天 · 最多 {1} 条（0 = 不限）" -f $uDays, $uRows)
     exit 0
 }
 
@@ -117,6 +125,7 @@ $navItems = @(
     @{ key = 'notify';   text = '弹窗设置' },
     @{ key = 'timing';   text = '时限与兜底' },
     @{ key = 'storage';  text = '存储与清理' },
+    @{ key = 'view';     text = '显示与加载' },
     @{ key = 'tools';    text = '工具' },
     @{ key = 'help';     text = '帮助' },
     @{ key = 'about';    text = '关于' }
@@ -196,11 +205,88 @@ function New-Hint([string]$text, [int]$x, [int]$y, [int]$w) {
 #   · 一行行说明会把页面撑满，还容易和控件挤在一起（上面那个重叠就是这么来的）；
 #   · 用户读一遍就够了，不需要每次都占着屏幕。
 # 所以：**缩写留在一行「提示」，完整解释收进 ? 按钮** —— 悬停有简述、点开有全文。
-$script:uiTip = New-Object System.Windows.Forms.ToolTip
-$script:uiTip.AutoPopDelay = 20000
-$script:uiTip.InitialDelay = 350
-$script:uiTip.ReshowDelay = 100
-$script:uiTip.ShowAlways = $true
+# ★ 2026-10-26 第五版（用户实证：「无法消失 并且换软件了还在显示」「间隔还是很大」）：
+#   系统 ToolTip 的三个毛病都不是参数问题：
+#     ① 手动 Show(...) 之后不受鼠标控制 —— 显示满设定时长才走（"无法消失"）
+#     ② ShowAlways=$true 的语义是"父窗体不是活动窗口也显示"（浮在别的软件上）
+#     ③ 位置由系统决定，代码改不了（"间隔还是很大"）
+#   之后两种"真浮层"也都被本机实测否掉，记在这里免得下一个人再走一遍：
+#     · 窗体内部 Panel：Visible=True、Parent/Size 全对，但**屏幕上不绘制**
+#       （UI Automation 也扫不到它）——"属性说可见、屏幕没有"，不能赌。
+#     · ToolStripDropDown：Bounds 正确（1209,552 · 416×101）、Visible=True，
+#       但被主窗挡住，截图里只剩一条阴影边 —— 用户看到的就是"点了没反应"。
+#   所以最终方案：**页面里的说明条**（Dock=Bottom，用到时才出现）。
+#   它满足用户的全部三条，而且由布局引擎保证一定画出来：
+#     · 永远不会浮在别的软件上（它是本窗体的一部分，跟着窗体一起没）
+#     · 永远不会"消失不了"（鼠标离开 1.2 秒 / 点一下 / 切页面 / 窗体失活 就收）
+#     · 不遮挡任何字段（在页面底部占一条，淡淡的，不是弹窗）
+$script:InfoPane = $null
+$script:InfoLabel = $null
+# ★ 2026-10-26（本机实测的第二个根因）：点击打开之后，鼠标一离开就收起 ——
+#   表现是"点了没反应"（1.2 秒就没了，用户根本来不及看）。日志实证：
+#   Show 之后 12ms 就进了 Hide。所以点击模式必须**钉住**，只由计时器/再点一下/
+#   切页面/窗体失活来收，鼠标离开不参与。
+$script:TipPinned = $false
+$script:TipHideTimer = New-Object System.Windows.Forms.Timer
+$script:TipHideTimer.Interval = 1200
+$script:TipHideTimer.Add_Tick({ try { $script:TipHideTimer.Stop(); Hide-FloatTip } catch { } })
+
+function Ensure-FloatTip {
+    if ($script:InfoPane) { return }
+    $p = New-Object System.Windows.Forms.Panel
+    # 不用 Dock：Dock=Bottom 实测会变成"有位置但看不见"（和窗体内部 Panel 同一个坑）。
+    # 固定坐标 + 明确尺寸，机制和页面里的普通 Label 完全一样，一定画得出来。
+    $p.Dock = 'None'
+    $p.Size = New-Object System.Drawing.Size(540, 104)
+    $p.BackColor = [System.Drawing.ColorTranslator]::FromHtml('#22252a')
+    $p.BorderStyle = 'FixedSingle'
+    $p.Padding = New-Object System.Windows.Forms.Padding(12, 9, 12, 9)
+    $p.Visible = $false
+    $lb = New-Object System.Windows.Forms.Label
+    $lb.Dock = 'Fill'
+    $lb.AutoSize = $false
+    $lb.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#e5e7eb')
+    $lb.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+    $p.Controls.Add($lb)
+    $script:InfoPane = $p
+    $script:InfoLabel = $lb
+}
+
+function Hide-FloatTip {
+    try { $script:TipHideTimer.Stop() } catch { }
+    $script:TipPinned = $false
+    try { if ($script:InfoPane -and $script:InfoPane.Visible) { $script:InfoPane.Visible = $false } } catch { }
+}
+
+# $Anchor = 那个 ? 标（只用来判断"它所在的页面还在不在"）；
+# $HoldMs > 0 = 到点自动消失（点击打开时用），0 = 一直显示，等 MouseLeave 的 1.2 秒计时器来收。
+# 文字截断（悬停只显示前 180 字）在 core\help-tip.ps1，那里可单测。
+function Show-FloatTip($Anchor, [string]$Text, [int]$HoldMs = 0) {
+    if (-not $Text -or -not $Anchor) { return }
+    # 页面已经被切走时不显示
+    if (-not $Anchor.Parent -or -not $Anchor.Parent.Visible) { return }
+    try { Ensure-FloatTip } catch { return }
+    try {
+        $script:InfoLabel.Text = $Text
+        $script:InfoPane.Visible = $true
+        $script:InfoPane.BringToFront()
+    } catch { return }
+    try {
+        if ($HoldMs -gt 0) {
+            # 点击打开 = 钉住：鼠标离开不收，只等计时器到期 / 再点一下 / 切页面 / 窗体失活
+            $script:TipPinned = $true
+            $script:TipHideTimer.Interval = $HoldMs
+            $script:TipHideTimer.Stop()
+            $script:TipHideTimer.Start()
+        } else {
+            $script:TipPinned = $false
+            $script:TipHideTimer.Stop()
+        }
+    } catch { }
+}
+
+# 窗体失去焦点（用户切到别的软件）→ 立刻收起来。这就是"换软件还在显示"的正面修法。
+try { $f.Add_Deactivate({ try { Hide-FloatTip } catch { } }) } catch { }
 
 # 完整说明弹窗：只读、可选中、可滚动（长文本不能靠 MessageBox —— 它选不中、超出就没了）
 function Show-HelpDialog([string]$title, [string]$detail) {
@@ -258,18 +344,44 @@ function New-HelpDot([string]$title, [string]$detail, [int]$x, [int]$y) {
     $l.Cursor = 'Hand'
     # 用 Tag 传参数而不是闭包：项目踩过「循环里用闭包变量，触发时只剩最后一个值」
     $l.Tag = [pscustomobject]@{ title = $title; detail = $detail }
-    # ★ 悬停就显示说明本身（这就是"在旁边淡淡的显示"）
-    try { $script:uiTip.SetToolTip($l, $detail) } catch { }
-    $l.Add_MouseEnter({ try { $this.ForeColor = $cAccent } catch { } })
-    $l.Add_MouseLeave({ try { $this.ForeColor = $cMuted } catch { } })
-    # ★ 2026-10-26（用户：「并且点击都没有效果」）：
-    #   上一版点击只在说明很长时才弹窗 → 短说明点了毫无反应，用户以为坏了。
-    #   现在：**点击 = 在它下方浮出说明（20 秒后自动消失）**。
-    #   用 ToolTip.Show 手动触发，视觉上仍是"淡淡的一层"，不是模态弹窗。
+    # ★ 悬停就显示说明本身（这就是"在旁边淡淡的显示"）—— 自绘浮层，不再用系统 ToolTip。
+    #   悬停时只显示**前 180 字**：完整的动辄几百字，铺满半屏就不是"淡淡一层"了。
+    $l.Add_MouseEnter({
+        try {
+            $this.ForeColor = $cAccent
+            $txt = [string]$this.Tag.detail
+            if (Get-Command Select-ErrwatchTipText -ErrorAction SilentlyContinue) { $txt = Select-ErrwatchTipText $txt 180 }
+            Show-FloatTip $this $txt 0
+        } catch { }
+    })
+    # 鼠标离开：{1.2 秒}后才收（轻微滑动不至于闪一下），之后**必定**消失。
+    # 但点击打开的那条是"钉住"的 —— 鼠标离开不收，否则用户来不及读（实测 12ms 就没了）。
+    $l.Add_MouseLeave({
+        try {
+            $this.ForeColor = $cMuted
+            if ($script:TipPinned) { return }
+            if ($script:InfoPane -and $script:InfoPane.Visible) {
+                $ms = 1200
+                if (Get-Command Get-ErrwatchTipHoldMs -ErrorAction SilentlyContinue) { $ms = Get-ErrwatchTipHoldMs 'leave' }
+                $script:TipHideTimer.Interval = [int]$ms
+                $script:TipHideTimer.Stop()
+                $script:TipHideTimer.Start()
+            }
+        } catch { }
+    })
+    # ★ 2026-10-26（用户：「并且点击都没有效果」＋「无法消失」）：
+    #   点击 = 切换。点一下在 ? 下方浮出说明并保持 12 秒，再点一下立刻收起来 ——
+    #   用户对"它到底关不关得掉"有明确的把手，不用猜。
+    #   只有极长的说明（>420 字）才走可滚动的只读窗（浮层装不下、也没法选中复制）。
     $l.Add_Click({
         try {
             $dt = [string]$this.Tag.detail
-            $script:uiTip.Show($dt, $this, 0, ($this.Height + 2), 20000)
+            $tt = [string]$this.Tag.title
+            if ($script:InfoPane -and $script:InfoPane.Visible) { Hide-FloatTip; return }
+            if ($dt.Length -gt 420) { Show-HelpDialog $tt $dt; return }
+            $ms = 12000
+            if (Get-Command Get-ErrwatchTipHoldMs -ErrorAction SilentlyContinue) { $ms = Get-ErrwatchTipHoldMs 'click' }
+            Show-FloatTip $this $dt ([int]$ms)
         } catch { }
     })
     return $l
@@ -287,9 +399,14 @@ function New-LabelWithHelp([string]$text, [string]$title, [string]$detail, [int]
     try { $lb.Font = $font } catch { }
     $lb.AutoSize = $true
     $lb.Location = New-Object System.Drawing.Point($x, $y)
+    # ★ 2026-10-26 第三版（用户：「还是好宽 大约中间还有两个字符」）：
+    #   原来用 TextRenderer.MeasureText 量宽度 —— 它会把 padding/边距算进去，
+    #   量出来比真实显示宽，于是 ? 离标签还差着 2–3 个字符。
+    #   现在直接问 Label 自己：设好 Text + Font 之后 PreferredWidth 就是**真实**占宽。
     $w = 0
-    try { $w = [System.Windows.Forms.TextRenderer]::MeasureText($text, $lb.Font).Width } catch { $w = $text.Length * 14 }
-    $dot = New-HelpDot $title $detail ($x + $w + 6) ($y + 2)
+    try { $w = [int]$lb.PreferredWidth } catch { }
+    if ($w -le 0) { try { $w = [System.Windows.Forms.TextRenderer]::MeasureText($text, $lb.Font, (New-Object System.Drawing.Size(0, 0)), [System.Windows.Forms.TextFormatFlags]::NoPadding).Width } catch { $w = $text.Length * 14 } }
+    $dot = New-HelpDot $title $detail ($x + $w + 3) ($y + 2)
     return [pscustomobject]@{ label = $lb; dot = $dot }
 }
 function New-Input([int]$x, [int]$y, [int]$w) {
@@ -793,6 +910,84 @@ switch ($curMode) {
 }
 try { Update-NotifyPage } catch { }
 
+# ── 面板：显示与加载（2026-10-26）──────────────────────────────────────────
+# 用户原话：「不需要一来就渲染全部的崩溃条目 默认 7 天 不要全部时间，
+#   只有用户往下找或者自己手动的时候再渲染更多的」。
+# 这一页只回答两件事：默认看几天、一次最多看多少条。
+# ★ 边界必须写在页面上（不然用户以为设小了会丢数据）：这里只影响**显示多少**，
+#   采集、保留、待处理、审计一条都不少；老记录还在文件里，点状态栏就能逐档加载。
+$pageView = New-Object System.Windows.Forms.Panel
+$pageView.Dock = 'Fill'
+$pageView.BackColor = $cBg
+$pageView.Visible = $false
+$body.Controls.Add($pageView)
+
+$pageView.Controls.Add((New-Title '显示与加载' 8))
+
+$lblViewNotice = New-Object System.Windows.Forms.Label
+$lblViewNotice.Location = New-Object System.Drawing.Point(22, 40)
+$lblViewNotice.Size = New-Object System.Drawing.Size(520, 22)
+$lblViewNotice.Font = $fontSmall
+$lblViewNotice.ForeColor = $cText
+$pageView.Controls.Add($lblViewNotice)
+
+function Update-ViewNotice {
+    $d = ''; $n = ''
+    try { if ($txtViewDays) { $d = $txtViewDays.Text.Trim() } } catch { }
+    try { if ($txtViewRows) { $n = $txtViewRows.Text.Trim() } } catch { }
+    if (-not $d) { $d = '?' }
+    if (-not $n) { $n = '?' }
+    $dTxt = if ($d -eq '0') { '全部时间' } else { "最近 $d 天" }
+    $nTxt = if ($n -eq '0') { '不限条数' } else { "最多 $n 条" }
+    try { $lblViewNotice.Text = "主界面默认：$dTxt · $nTxt" } catch { }
+}
+
+$viewDaysLbl = New-LabelWithHelp '默认显示最近（天）' '默认显示最近多少天' (@'
+主界面一打开只看这段时间内的记录，更早的留着、不搬进表格。
+
+填 0 = 全部时间（不按天数限制）。
+启动要处理的行数越少，界面出来得越快——这是「打开很慢」的主要来源。
+'@) 22 76
+$pageView.Controls.Add($viewDaysLbl.label)
+$pageView.Controls.Add($viewDaysLbl.dot)
+$txtViewDays = New-Input 290 74 80
+# 老 settings.json 里没有 ui 段时也不能空白：按新默认值回显（7 天 / 500 条）
+$__vDays = 7; $__vRows = 500
+try {
+    if ($s.PSObject.Properties['ui'] -and $s.ui) {
+        if ($null -ne $s.ui.windowDays) { $__vDays = [int]$s.ui.windowDays }
+        if ($null -ne $s.ui.pageSize) { $__vRows = [int]$s.ui.pageSize }
+    }
+} catch { }
+$txtViewDays.Text = [string]$__vDays
+$pageView.Controls.Add($txtViewDays)
+$pageView.Controls.Add((New-Hint '0 = 全部时间；1–3650 天。' 380 78 240))
+
+$viewRowsLbl = New-LabelWithHelp '一次最多显示（条）' '一次最多显示多少条' (@'
+超过这个数量时，只显示**最近**的那些条，状态栏会写「还能加载更多」。
+
+填 0 = 不限条数。
+往下滚动或点状态栏，会按 500 → 2000 → 不限 逐档放宽，不会一次性把几千条全渲染出来。
+'@) 22 130
+$pageView.Controls.Add($viewRowsLbl.label)
+$pageView.Controls.Add($viewRowsLbl.dot)
+$txtViewRows = New-Input 290 128 80
+$txtViewRows.Text = [string]$__vRows
+$pageView.Controls.Add($txtViewRows)
+$pageView.Controls.Add((New-Hint '0 = 不限；100–100000 条。' 380 132 240))
+
+$lblViewNote = New-Object System.Windows.Forms.Label
+$lblViewNote.Location = New-Object System.Drawing.Point(22, 186)
+$lblViewNote.Size = New-Object System.Drawing.Size(600, 60)
+$lblViewNote.Font = $fontSmall
+$lblViewNote.ForeColor = $cMuted
+$lblViewNote.Text = "这两项只影响「主界面显示多少」，不影响采集、保留和待处理 —— 一条记录都不会少。`r`n老记录还在文件里：想看得更早/更多，点主界面左下角状态栏就会逐档加载。"
+$pageView.Controls.Add($lblViewNote)
+
+$txtViewDays.Add_TextChanged({ try { Update-ViewNotice } catch { } })
+$txtViewRows.Add_TextChanged({ try { Update-ViewNotice } catch { } })
+try { Update-ViewNotice } catch { }
+
 $pageStorage = New-Object System.Windows.Forms.Panel
 $pageStorage.Dock = 'Fill'
 $pageStorage.BackColor = $cBg
@@ -1250,11 +1445,15 @@ function Update-List {
 }
 
 function Show-Page([string]$key) {
+    # 换页先把说明浮层收起来 —— 它是挂在**上一个页面**上的，
+    # 不收起时会跟着旧页面留在内存里，用户切回来还以为"又自己冒出来了"。
+    try { Hide-FloatTip } catch { }
     $pageRecovery.Visible = ($key -eq 'recovery')
     $pageWatch.Visible = ($key -eq 'watch')
     $pageNotify.Visible = ($key -eq 'notify')
     $pageTiming.Visible = ($key -eq 'timing')
     $pageStorage.Visible = ($key -eq 'storage')
+    $pageView.Visible = ($key -eq 'view')
     $pageTools.Visible = ($key -eq 'tools')
     $pageHelp.Visible = ($key -eq 'help')
     $pageAbout.Visible = ($key -eq 'about')
@@ -1434,6 +1633,22 @@ $btnSave.Add_Click({
         $st.storage.keepDays = $vKeep
         $st.storage.fileKeepDays = $vFKeep
         $st.storage.copyDir = $copyDir
+
+        # 显示与加载（2026-10-26）：时间窗口 + 条数上限。
+        # 两项都允许 0（0 天 = 全部时间，0 条 = 不限条数），所以区间下限就是 0 ——
+        # 与 core 的 EwSettingsRanges.uiWindowDays / uiPageSize 同一套口径。
+        $vDays = 0; $vRows = 0
+        if (-not [int]::TryParse($txtViewDays.Text.Trim(), [ref]$vDays)) { [void][System.Windows.Forms.MessageBox]::Show('「默认显示最近多少天」要填整数（0 = 全部时间）'); return }
+        if (-not [int]::TryParse($txtViewRows.Text.Trim(), [ref]$vRows)) { [void][System.Windows.Forms.MessageBox]::Show('「一次最多显示多少条」要填整数（0 = 不限）'); return }
+        $vVDays = ConvertTo-ErrwatchSettingNumber $vDays $script:EwSettingsRanges.uiWindowDays[0] $script:EwSettingsRanges.uiWindowDays[1]
+        $vVRows = ConvertTo-ErrwatchSettingNumber $vRows $script:EwSettingsRanges.uiPageSize[0] $script:EwSettingsRanges.uiPageSize[1]
+        if ($null -eq $vVDays) { [void][System.Windows.Forms.MessageBox]::Show("显示天数 $vDays 超出范围（0–3650），没有保存。"); return }
+        if ($null -eq $vVRows) { [void][System.Windows.Forms.MessageBox]::Show("一次最多显示 $vRows 条超出范围（0–100000），没有保存。"); return }
+        if (-not $st.PSObject.Properties['ui'] -or -not $st.ui) {
+            $st | Add-Member -NotePropertyName ui -NotePropertyValue ([pscustomobject]@{ windowDays = 7; pageSize = 500 }) -Force
+        }
+        $st.ui.windowDays = $vVDays
+        $st.ui.pageSize = $vVRows
         # ★ 2026-10-25（审计「清理与备份」挖出的灾难级误删）：保存目录 = 用户明确授权，
         #   当场补上归属标记。没有标记的目录清理会跳过（否则用户误选「文档」目录后，
         #   一次「删除过时文件」就能把 40 天没动的自己的文档删掉 —— 实测过）。
@@ -1501,6 +1716,20 @@ Update-List
 Update-AppChoices
 Update-WatchList
 Refresh-SvcState
+# 说明条（2026-10-26 第五版）：加到**窗体**（$f）而不是 $body ——
+#   实测 $body 的子控件会被页面（Dock=Fill）和底部按钮条压住/裁掉，
+#   而 $bar 之所以always 可见，正是因为它直接挂在 $f 上并 BringToFront。
+#   这里用同一层级：$f.Controls.Add + BringToFront，位置在页面区中部偏下。
+try {
+    Ensure-FloatTip
+    $px = [int]$sideW + 16
+    $py = [int]([Math]::Max(120, $f.ClientSize.Height * 0.56))
+    $script:InfoPane.Location = New-Object System.Drawing.Point($px, $py)
+    $script:InfoPane.Size = New-Object System.Drawing.Size(520, 96)
+    $f.Controls.Add($script:InfoPane)
+    $script:InfoPane.BringToFront()
+    $script:InfoPane.Visible = $false
+} catch { }
 Show-Page 'recovery'
 # ★ 2026-10-24（用户反馈「还是有黑框」）：上次只是让脚本自己藏控制台，
 #   但进程启动到执行到那一行之间，控制台已经先画出来了（约 0.3 秒的闪）。
@@ -1528,3 +1757,4 @@ if ($CheckBuild) {
 $f.AcceptButton = $btnSave
 $f.CancelButton = $btnCancel
 [void]$f.ShowDialog()
+
