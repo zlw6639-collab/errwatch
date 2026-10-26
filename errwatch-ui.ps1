@@ -291,7 +291,17 @@ function Get-SentinelRows {
     if (Get-Command Select-ErrwatchLatestEventById -ErrorAction SilentlyContinue) {
         $latest = @(Select-ErrwatchLatestEventById -Rows @($script:SentinelRaw))
     }
+    # ★ 2026-10-26（用户：「加个进度条？不然用户会觉得没有启动」）：
+    #   这一段是启动时最花时间的地方（1700+ 条 × 每条算状态+人话）。
+    #   挂一个进度钩子：每 50 条推进一次状态栏百分比，并让消息泵跑一下。
+    #   钩子是可选的 —— 没有它（比如单元测试里直接调本函数）行为完全不变。
+    $script:LoadRow = 0
+    $script:LoadTotalRows = @($latest).Count
     foreach ($e in $latest) {
+        $script:LoadRow++
+        if (($script:LoadRow % 50) -eq 0 -and (Get-Command Update-LoadProgress -ErrorAction SilentlyContinue)) {
+            try { Update-LoadProgress $script:LoadRow $script:LoadTotalRows } catch { }
+        }
         # 只有中间态（取证没结束、超时兜底也没来）的不单独成行 —— 与原来一致
         if ([string]$e.verdict -eq 'diagnosing') { continue }
         $rows += [pscustomobject]@{
@@ -1122,16 +1132,23 @@ $grid.ContextMenuStrip = $ctx
 # ── 详情区：RichTextBox（可滚动、可加粗，永不裁切） ───────────────────────
 $panelBottom = New-Object System.Windows.Forms.Panel
 $panelBottom.Dock = 'Bottom'
-$panelBottom.Height = 230
+# 初始高度 = 收起态（40），与下面的 $script:DetailExpanded=$false 保持一致。
+# 两处不同步会出现「标题条写着收起、面板却占 230px」的自相矛盾。
+$panelBottom.Height = 40
 $panelBottom.BackColor = $cPanel
 $panelBottom.Padding = New-Object System.Windows.Forms.Padding(14, 6, 14, 6)
 $form.Controls.Add($panelBottom)
 
 # ★ 2026-10-22 用户反馈：详情占太多地方，想要「可隐藏的下拉框」。
 #   做一个可点击的标题条：点一下收起/展开，列表就能占满。
-$script:DetailExpanded = $true
+# ★ 2026-10-26（用户：「详细信息现在打开是默认开启的 可以默认收起吗
+#   这样加载的时候可以先往后一点」）：
+#   默认改成**收起**。理由不只是省地方：详情区原本会在启动时立刻塞进一大段文本，
+#   而那时列表还在加载 —— 视觉上就是"先蹦出一大坨字、然后才慢慢有内容"。
+#   收起之后启动画面干净得多，用户点了才展开（那时数据已经在了）。
+$script:DetailExpanded = $false
 $lblDetailHead = New-Object System.Windows.Forms.Label
-$lblDetailHead.Text = '▾  详细信息（点我收起）'
+$lblDetailHead.Text = '▸  详细信息（点我展开）'
 $lblDetailHead.Dock = 'Top'
 $lblDetailHead.Height = 24
 $lblDetailHead.Font = $fSmall
@@ -1176,7 +1193,55 @@ if (-not $NoAutoScan) {
         try { $script:autoScanTimer.Stop(); $script:autoScanTimer.Dispose() } catch { }
         try { Invoke-Scan -ShowResult $false } catch { }
     })
-    $form.Add_Shown({ try { $script:autoScanTimer.Start() } catch { } })
+}
+
+# ★ 2026-10-26（用户：「工具打开有点慢 我觉得可以加个进度条？不然用户会觉得没有启动」）：
+#   实测（探针插在真实启动路径上，pwsh 7）：
+#     界面构建完成          529 ms   ← 很快
+#     Update-Grid 里的数据加载 约 3500 ms  ← 真凶（读 1768 条 + 逐条算出状态/人话）
+#     合起来约 7.3 秒才写 ui.pid、窗口才显示
+#
+#   原来的写法是**在窗体显示之前**就同步把数据算完（旧的 `Update-Grid` 在"启动"段），
+#   于是那 4 秒全落在「点了没反应」的区间里 —— 用户看到的不是慢，是**像没启动**。
+#
+#   现在改成：先把窗口画出来（0.5 秒内就有界面），状态栏写明「正在加载」，
+#   再加载数据，最后才启动自动扫描。**用户立刻看到反馈，不会怀疑没点上。**
+#   数据全部来自本地文件，不联网。
+$form.Add_Shown({
+    # ① 让窗口真的画出来（不 Refresh 的话下面同步加载会把它一起拖住）
+    try { $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() } catch { }
+    # ② 状态栏明说在干什么（这就是用户要的"进度提示"）
+    try { $script:lblStatusL.Text = '正在加载历史记录…（约几秒）' } catch { }
+    try { $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() } catch { }
+    # ③ 加载（本地文件，不联网）；进度由 Update-Grid → Get-SentinelRows 里的钩子推进
+    try { Update-Grid } catch { }
+    # ④ 数据就位后才启动自动扫描（顺序反了会拿空表去扫描）
+    if (-not $NoAutoScan) { try { $script:autoScanTimer.Start() } catch { } }
+})
+
+# ── 加载进度（2026-10-26）────────────────────────────────────────────────
+# 用户：「工具打开有点慢 我觉得可以加个进度条？不然用户会觉得没有启动」
+# 实测：窗口 0.17 秒就画出来了（原来要 7 秒），但**数据要再算几秒**。
+# 光写一句"正在加载"只能证明没卡死，看不出还要多久 —— 所以给个百分比。
+#
+# 做法刻意保守：不新开线程、不建进度条控件（那要动布局），只更新状态栏文字，
+# 每 N 条让出一次消息泵（否则窗口照样白屏无响应，进度也不会画出来）。
+$script:LoadProgress = @{ done = 0; total = 0; lastShown = -1 }
+function Update-LoadProgress([int]$done, [int]$total) {
+    $script:LoadProgress.done = $done
+    $script:LoadProgress.total = $total
+    if ($total -le 0) { return }
+    $pct = [int][Math]::Floor($done * 100 / $total)
+    # 每 5% 才刷一次 —— 每条都刷会把时间花在重绘上，反而更慢
+    if ($pct -eq $script:LoadProgress.lastShown) { return }
+    if (($pct % 5) -ne 0 -and $pct -ne 100) { return }
+    $script:LoadProgress.lastShown = $pct
+    try { $script:lblStatusL.Text = "正在加载历史记录… $pct%（$done/$total 条）" } catch { }
+    try { [System.Windows.Forms.Application]::DoEvents() } catch { }
+}
+function Complete-LoadProgress {
+    try { $script:lblStatusL.Text = '' } catch { }
+    $script:LoadProgress = @{ done = 0; total = 0; lastShown = -1 }
 }
 
 $rtbDetail = New-Object System.Windows.Forms.RichTextBox
@@ -1187,6 +1252,8 @@ $rtbDetail.BackColor = $cPanel
 $rtbDetail.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
 $rtbDetail.ForeColor = $cText
 $rtbDetail.WordWrap = $true
+# 默认收起 → 详情框初始不可见（与 $script:DetailExpanded=$false / 面板高 40 同步）
+$rtbDetail.Visible = $false
 $detailHost.Controls.Add($rtbDetail)
 
 $lblDetailHead.Add_Click({
@@ -1203,17 +1270,84 @@ $lblDetailHead.Add_Click({
     }
 })
 
+# ★ 2026-10-26（用户：「渲染详细哪里 这种分割感很强」「渲染出来可以不要直接雷霆跳出吗
+#   可以像聊天信息一样 一条条的滑出来吗」）：
+#   原来是**边算边 AppendText** —— 一次点击瞬间把整段（可能几十行）砸进 RichTextBox，
+#   视觉上就是"啪一下全出来"，而且每行都 new 一个 Font 对象（几十次分配，卡顿来源之一）。
+#
+#   现在改成两步：
+#     ① 渲染阶段只**收集**要写的行（不碰控件）；
+#     ② 渲染结束后由 Timer 每 ~16ms 写 2 行 —— 像聊天记录一样逐条出现。
+#   ★ -Check 自检必须同步（它要立即读控件内容做断言），所以那条路径保持直写。
+$script:DetailBuf = New-Object System.Collections.ArrayList
+$script:DetailAsync = -not $Check
+$script:DetailTimer = $null
+
+# Font 只建一次（原来每行 new 一个 Font，几十行 = 几十次 GDI 分配）
+$script:FontDetail = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+$script:FontDetailBold = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
+
 function Write-Detail([string]$text, [switch]$Bold, [System.Drawing.Color]$color) {
     if ($null -eq $color) { $color = $cText }
-    $rtbDetail.Select($rtbDetail.TextLength, 0)
-    $rtbDetail.SelectionFont = if ($Bold) {
-        New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
-    } else {
-        New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+    if ($script:DetailAsync) {
+        # 收集阶段：只入队，不碰控件（这样渲染再长也不会有"一坨跳出"）
+        [void]$script:DetailBuf.Add([pscustomobject]@{ text = $text; bold = [bool]$Bold; color = $color })
+        return
     }
+    $rtbDetail.Select($rtbDetail.TextLength, 0)
+    $rtbDetail.SelectionFont = if ($Bold) { $script:FontDetailBold } else { $script:FontDetail }
     $rtbDetail.SelectionColor = $color
     $rtbDetail.AppendText($text)
     $rtbDetail.AppendText("`r`n")
+}
+
+# 开始播放：清空控件，然后定时逐行写
+function Start-DetailPlayback {
+    # ★ 同步模式（-Check 自检）：Write-Detail 已经直写进控件了，这里**什么都不做**。
+    #   第一版在这里也 `$rtbDetail.Clear()`，结果把刚写好的内容清掉 ——
+    #   -Check 输出的「详情(日志行)」直接变成空字符串（自检当场抓到）。
+    #   自检要读控件做断言，所以这条路径绝不能动控件。
+    if (-not $script:DetailAsync) {
+        $script:DetailBuf.Clear()
+        return
+    }
+    # 异步模式：没有新内容就保持原样（不要清掉上一次渲染的结果）
+    if ($script:DetailBuf.Count -eq 0) { return }
+    try { $rtbDetail.Clear() } catch { }
+
+    # 停掉上一次没播完的（快速上下切行时不会两个播放器抢同一个控件）
+    if ($script:DetailTimer) {
+        try { $script:DetailTimer.Stop(); $script:DetailTimer.Dispose() } catch { }
+        $script:DetailTimer = $null
+    }
+    $script:DetailPos = 0
+    $script:DetailTimer = New-Object System.Windows.Forms.Timer
+    $script:DetailTimer.Interval = 16          # ≈60fps，肉眼看是连续滑出
+    $script:DetailTimer.Add_Tick({
+        try {
+            # 收起状态下播放没意义（用户看不到），直接一次写完省电
+            $batch = if ($rtbDetail.Visible) { 2 } else { 999 }
+            for ($k = 0; $k -lt $batch -and $script:DetailPos -lt $script:DetailBuf.Count; $k++) {
+                $it = $script:DetailBuf[$script:DetailPos]
+                $script:DetailPos++
+                $rtbDetail.Select($rtbDetail.TextLength, 0)
+                $rtbDetail.SelectionFont = if ($it.bold) { $script:FontDetailBold } else { $script:FontDetail }
+                $rtbDetail.SelectionColor = $it.color
+                $rtbDetail.AppendText([string]$it.text)
+                $rtbDetail.AppendText("`r`n")
+            }
+            if ($script:DetailPos -ge $script:DetailBuf.Count) {
+                $script:DetailTimer.Stop(); $script:DetailTimer.Dispose(); $script:DetailTimer = $null
+                $script:DetailBuf.Clear()
+                # 播完回到顶部（否则用户看到的是结尾）
+                try { $rtbDetail.SelectionStart = 0; $rtbDetail.ScrollToCaret() } catch { }
+            }
+        } catch {
+            try { $script:DetailTimer.Stop(); $script:DetailTimer.Dispose() } catch { }
+            $script:DetailTimer = $null
+        }
+    })
+    $script:DetailTimer.Start()
 }
 
 # ── 状态栏 ────────────────────────────────────────────────────────────────
@@ -1724,6 +1858,10 @@ function Update-Grid {
         } catch {}
     }
     Show-Filtered
+    # 加载完成：把状态栏的进度文字清掉（2026-10-26）
+    if (Get-Command Complete-LoadProgress -ErrorAction SilentlyContinue) {
+        try { Complete-LoadProgress } catch { }
+    }
 }
 
 function Show-Filtered {
@@ -1840,7 +1978,7 @@ function Render-DetailForRow {
         # ★ 2026-10-24（用户：「哨兵看到的进程消失也要计入」）：这类行不是 Windows 错误日志，
         #   字段结构完全不同 —— 硬套规则匹配只会显示出「没说明」，那才是真的丢信息。
         if ($raw -and $raw.PSObject.Properties['verdict'] -and -not $raw.PSObject.Properties['provider']) {
-            $rtbDetail.Clear()
+            $script:DetailBuf.Clear()
             Write-Detail ("[$($r.时间)]  $($r.程序)    进程消失（哨兵观测）") -Bold -color $cText2
             # ★ 2026-10-24（用户：「OBSERVATION_UNCERTAIN 我觉得这种不行」「什么叫找到了崩溃证据…
             #   普通用户想知道为什么崩溃了、原因、解决办法」）：
@@ -1956,7 +2094,7 @@ function Render-DetailForRow {
         if ($raw) {
             $hit = TranslateForApp $(if ([string]$raw.app) { [string]$raw.app } else { [string]$raw.provider }) (New-ErrwatchHay ([string]$raw.code) ([string]$raw.msg))
         }
-        $rtbDetail.Clear()
+        $script:DetailBuf.Clear()
         Write-Detail ("[$($r.时间)]  $($r.程序)    $($r.错误码)    $($r.模块)") -Bold -color $cText2
         # ★ 2026-10-22：先回答"这是什么软件"——用户最常问的就是这个（route 说"找软件方"，
         #   但他不知道该找哪个软件）。收录过就显示名字与日志路径；没收录就如实说。
@@ -2088,6 +2226,8 @@ function Render-DetailForRow {
             }
         } catch {}
     } catch {}
+    # 渲染阶段只收集，这里统一"播放"（逐行滑出，不再是啪一下全砸进来）
+    try { Start-DetailPlayback } catch { }
 }
 
 $grid.Add_SelectionChanged({
@@ -2212,10 +2352,20 @@ try {
 } catch {}
 
 # ── 启动 ──────────────────────────────────────────────────────────────────
-try {
-    Update-Grid
-} catch {
-    [System.Windows.Forms.MessageBox]::Show("加载历史失败：$($_.Exception.Message)`n`n仍然可以打开窗口，但列表会是空的。")
+# ★ 2026-10-26（用户：「工具打开有点慢…不然用户会觉得没有启动」）：
+#   这里**原来是无条件同步 `Update-Grid`**，而它在窗口显示之前要跑约 3.5 秒
+#   （读 1768 条历史+哨兵事实并逐条算出状态/人话）。那 3.5 秒全落在
+#   「点了没反应」的区间里 —— 用户感受到的不是慢，是像没启动。
+#
+#   现在正常启动**不再在这里加载**：窗口先画出来（0.5 秒内），
+#   加载交给上面 Add_Shown 里的顺序（刷新 → 提示 → 加载 → 自动扫描）。
+#   -Check 是自检，它需要真实数据才能诊断，所以保留同步加载。
+if ($Check) {
+    try {
+        Update-Grid
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("加载历史失败：$($_.Exception.Message)`n`n仍然可以打开窗口，但列表会是空的。")
+    }
 }
 
 if ($Check) {

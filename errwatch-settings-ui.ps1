@@ -118,6 +118,7 @@ $navItems = @(
     @{ key = 'timing';   text = '时限与兜底' },
     @{ key = 'storage';  text = '存储与清理' },
     @{ key = 'tools';    text = '工具' },
+    @{ key = 'help';     text = '帮助' },
     @{ key = 'about';    text = '关于' }
 )
 $navButtons = @{}
@@ -172,8 +173,118 @@ function New-Hint([string]$text, [int]$x, [int]$y, [int]$w) {
     $l.ForeColor = $cMuted
     $l.Font = $fontSmall
     $l.Location = New-Object System.Drawing.Point($x, $y)
-    $l.Size = New-Object System.Drawing.Size($w, 34)
+    # ★ 2026-10-26（用户截图实证：「渲染重叠了」）：
+    #   原来固定 `Height = 34`，而很多提示实际是 2–3 行（小字号一行约 15px）
+    #   → 文字溢出、压住下面的输入框和标题。现在按真实文字量算高度：
+    #   量一次、给足空间，绝不压到下一个控件。
+    $h = 34
+    try {
+        $sz = [System.Windows.Forms.TextRenderer]::MeasureText(
+            $text, $l.Font,
+            (New-Object System.Drawing.Size($w, 0)),
+            [System.Windows.Forms.TextFormatFlags]::WordBreak)
+        $h = [Math]::Max(16, $sz.Height + 6)
+    } catch { }
+    $l.Size = New-Object System.Drawing.Size($w, $h)
+    $l.AutoSize = $false
     return $l
+}
+
+# ── 帮助气泡（2026-10-26，用户：「这些详细备注可以改成鼠标移到上面再显示吗？
+#    或者在「存储与清理」旁边加一个小脚标 ？ 用户可以点 ？ 就能完整看到解释」）──
+# 为什么不再把长说明直接平铺在页面上：
+#   · 一行行说明会把页面撑满，还容易和控件挤在一起（上面那个重叠就是这么来的）；
+#   · 用户读一遍就够了，不需要每次都占着屏幕。
+# 所以：**缩写留在一行「提示」，完整解释收进 ? 按钮** —— 悬停有简述、点开有全文。
+$script:uiTip = New-Object System.Windows.Forms.ToolTip
+$script:uiTip.AutoPopDelay = 20000
+$script:uiTip.InitialDelay = 350
+$script:uiTip.ReshowDelay = 100
+$script:uiTip.ShowAlways = $true
+
+# 完整说明弹窗：只读、可选中、可滚动（长文本不能靠 MessageBox —— 它选不中、超出就没了）
+function Show-HelpDialog([string]$title, [string]$detail) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = if ($title) { "说明 · $title" } else { '说明' }
+    $d.Size = New-Object System.Drawing.Size(560, 420)
+    $d.StartPosition = 'CenterParent'
+    $d.BackColor = $cBg
+    $d.ForeColor = $cText
+    $d.MinimizeBox = $false
+    $d.ShowInTaskbar = $false
+
+    $rt = New-Object System.Windows.Forms.RichTextBox
+    $rt.Dock = 'Fill'
+    $rt.ReadOnly = $true
+    $rt.BorderStyle = 'None'
+    $rt.BackColor = $cBg
+    $rt.ForeColor = $cText
+    $rt.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+    $rt.Text = $detail
+    $rt.Select(0, 0)
+    $d.Controls.Add($rt)
+
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = '知道了'
+    $btn.Dock = 'Bottom'
+    $btn.Height = 38
+    $btn.FlatStyle = 'Flat'
+    $btn.BackColor = $cAccent
+    $btn.ForeColor = [System.Drawing.Color]::White
+    $btn.Add_Click({ $d.Close() })
+    $d.Controls.Add($btn)
+    $d.AcceptButton = $btn
+
+    [void]$d.ShowDialog($f)
+}
+
+# 一个很小的 ? 标（2026-10-26 第三版）
+# ★ 用户两次纠正：
+#   ① 「不是啊喂 是在相关需要解释的地方出现小标 ？ 而且不能太大 太突兀」
+#      → 从页面顶部的 20×20 带框按钮，改成 15×15 无边框小标、贴在字段标签右边。
+#   ② 「解释做成弹窗我觉得不太好 可以在旁边淡淡的显示吗 不要这种雷霆大弹窗」
+#      → 悬停就用系统 ToolTip 显示（淡淡一层浮标，不挡页面、不抢焦点、自动消失）；
+#        点击**默认不弹窗**，只有说明特别长（>320 字）时才给"点开看全文"的退路。
+$script:HelpDotSize = 15
+function New-HelpDot([string]$title, [string]$detail, [int]$x, [int]$y) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = '?'
+    $l.Size = New-Object System.Drawing.Size($script:HelpDotSize, $script:HelpDotSize)
+    $l.Location = New-Object System.Drawing.Point($x, $y)
+    $l.TextAlign = 'MiddleCenter'
+    $l.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 8, [System.Drawing.FontStyle]::Bold)
+    $l.ForeColor = $cMuted
+    $l.BackColor = [System.Drawing.Color]::Transparent
+    $l.Cursor = 'Hand'
+    # 用 Tag 传参数而不是闭包：项目踩过「循环里用闭包变量，触发时只剩最后一个值」
+    $l.Tag = [pscustomobject]@{ title = $title; detail = $detail }
+    # ★ 悬停就显示说明本身（这就是"在旁边淡淡的显示"）
+    try { $script:uiTip.SetToolTip($l, $detail) } catch { }
+    $l.Add_MouseEnter({ try { $this.ForeColor = $cAccent } catch { } })
+    $l.Add_MouseLeave({ try { $this.ForeColor = $cMuted } catch { } })
+    # 点击只在说明很长时才弹窗（短说明悬停足够，弹窗反而烦）
+    $l.Add_Click({
+        try {
+            $dt = [string]$this.Tag.detail
+            if ($dt.Length -gt 320) { Show-HelpDialog ([string]$this.Tag.title) $dt }
+        } catch { }
+    })
+    return $l
+}
+
+# 「字段标签 + 紧跟其后的 ? 小标」—— 一行搞定，省得每次手算命 x 坐标。
+# 返回 @{ label = ...; dot = ... }，调用方两个都 Add 进页面即可。
+function New-LabelWithHelp([string]$text, [string]$title, [string]$detail, [int]$x, [int]$y) {
+    $lb = New-Object System.Windows.Forms.Label
+    $lb.Text = $text
+    $lb.ForeColor = $cText
+    $lb.AutoSize = $true
+    $lb.Location = New-Object System.Drawing.Point($x, $y)
+    # 标签宽度要走实际丈量，否则算不准 ? 该放哪
+    $w = 0
+    try { $w = [System.Windows.Forms.TextRenderer]::MeasureText($text, $lb.Font).Width } catch { $w = $text.Length * 14 }
+    $dot = New-HelpDot $title $detail ($x + $w + 4) ($y + 2)
+    return [pscustomobject]@{ label = $lb; dot = $dot }
 }
 function New-Input([int]$x, [int]$y, [int]$w) {
     $t = New-Object System.Windows.Forms.TextBox
@@ -259,7 +370,7 @@ $lblRvCount.AutoSize = $true
 $pageRecovery.Controls.Add($lblRvCount)
 
 # ── 救援入口（2026-10-24 用户：收拢后“开始应急救援”没地方点了，放进救援目录页 + 选程序）──
-$pageRecovery.Controls.Add((New-FieldLabel '对哪个程序开始救援' 22 424))
+$pageRecovery.Controls.Add((New-FieldLabel '手动救援：选一个程序' 22 424))
 $cmbApp = New-Object System.Windows.Forms.ComboBox
 $cmbApp.DropDownStyle = 'DropDown'
 $cmbApp.Location = New-Object System.Drawing.Point(22, 446)
@@ -270,7 +381,7 @@ $pageRecovery.Controls.Add($cmbApp)
 
 $btnRescue = New-Action '⚑ 开始应急救援' 286 444 170
 $pageRecovery.Controls.Add($btnRescue)
-$pageRecovery.Controls.Add((New-Hint '这是**手动**救援：选一个程序主动去救。哨兵发现故障时走的是事件自己的程序，不受这里影响。救援只读，不改/不覆盖任何文件。' 22 478 520))
+$pageRecovery.Controls.Add((New-Hint '这里是手动救援：你主动选一个程序去找它的恢复文件。哨兵发现故障时会用事件自己的程序，不受这里影响。救援只读，不改也不覆盖任何文件。' 22 478 520))
 
 $btnRescue.Add_Click({
     try {
@@ -295,7 +406,16 @@ $pageWatch.Visible = $false
 $body.Controls.Add($pageWatch)
 
 $pageWatch.Controls.Add((New-Title '监视目标' 8))
-$pageWatch.Controls.Add((New-Hint '这里加的程序，退出时会被记录；正常退出（退出码 0）不会打扰你。' 22 40 540))
+$watchHeadLbl = New-LabelWithHelp '监视目标' '监视目标是什么' (@'
+「内置」那些是随包分发的默认名单（常见的设计/办公工具），装了就生效，不用你管。
+「我加的」是你自己加的，按程序名匹配（不带 .exe 也行）。
+
+★ 只有名单里的程序退出才会被记录；新装的后台程序要崩过一次才会被自动学到。
+★ 正常退出（退出码 0）不会打扰你，也不会进待处理。
+'@) 22 40
+$pageWatch.Controls.Add($watchHeadLbl.label)
+$pageWatch.Controls.Add($watchHeadLbl.dot)
+$pageWatch.Controls.Add((New-Hint '这里加的程序，退出时会被记录；正常退出不会打扰你。' 22 66 540))
 
 $listWatch = New-Object System.Windows.Forms.ListBox
 $listWatch.Location = New-Object System.Drawing.Point(22, 84)
@@ -514,7 +634,17 @@ $rbNotifyNone.ForeColor = $cText
 $pageNotify.Controls.Add($rbNotifyNone)
 
 # 白名单输入（只在白名单模式启用）
-$pageNotify.Controls.Add((New-FieldLabel '白名单（程序名，逗号分隔）' 22 246))
+$wlLbl = New-LabelWithHelp '白名单（程序名，逗号分隔）' '白名单' (@'
+只在「只弹白名单里的程序」这个模式下生效。
+
+填程序名就行（gcad、winword、QQ），带不带 .exe 都认，
+也可以直接粘完整路径，保存时会自动规范化成程序名。
+
+★ 白名单是空的时候这个模式等于「一条都不弹」——
+  所以保存时如果选了白名单模式却没填东西，会拦下来提醒你。
+'@) 22 246
+$pageNotify.Controls.Add($wlLbl.label)
+$pageNotify.Controls.Add($wlLbl.dot)
 $txtNotifyWl = New-Input 22 268 460
 $txtNotifyWl.Text = (@($s.notify.whitelist) -join ', ')
 $pageNotify.Controls.Add($txtNotifyWl)
@@ -528,7 +658,14 @@ $lblNotifyWlState.Size = New-Object System.Drawing.Size(540, 20)
 $pageNotify.Controls.Add($lblNotifyWlState)
 
 # 气泡显示时长（原来在时限页之外没有入口，顺手放这儿更顺手）
-$pageNotify.Controls.Add((New-FieldLabel '气泡停留秒数' 22 352))
+$secLbl = New-LabelWithHelp '气泡停留秒数' '气泡停留时长' (@'
+右下角那个气泡显示几秒。3–30 秒。
+
+太短：还没读完就没了；太长：挡着右下角别的东西。
+全屏的时候根本不弹（不打断你），所以这里只影响窗口模式。
+'@) 22 352
+$pageNotify.Controls.Add($secLbl.label)
+$pageNotify.Controls.Add($secLbl.dot)
 $txtNotifySec = New-Input 22 374 80
 $txtNotifySec.Text = [string]$s.notify.seconds
 $pageNotify.Controls.Add($txtNotifySec)
@@ -545,7 +682,14 @@ $chkNotifyOverdue.Checked = $true
 try { if ($s.notify.overdue.PSObject.Properties['enabled']) { $chkNotifyOverdue.Checked = [bool]$s.notify.overdue.enabled } } catch { }
 $pageNotify.Controls.Add($chkNotifyOverdue)
 
-$pageNotify.Controls.Add((New-FieldLabel '超过多久算过期（分钟）' 22 474))
+$ovLbl = New-LabelWithHelp '超过多久算过期（分钟）' '超时提醒的时限' (@'
+待处理事件超过这个时间还没处理，就弹一次「有故障超时未处理」。
+
+★ 和「时限与兜底」页的「兜底决策时限」是同一个值——
+  两个输入框会互相同步，改哪边都一样，不会出现两套数字。
+'@) 22 474
+$pageNotify.Controls.Add($ovLbl.label)
+$pageNotify.Controls.Add($ovLbl.dot)
 # ★ 与「时限与兜底」页的 deadlineMinutes 是**同一个字段**：两个输入框双向同步，
 #   绝不允许出现"两处各存一份"（那是两份真相，必然漂移）。
 $txtOverdueMin = New-Input 250 472 80
@@ -652,44 +796,65 @@ $body.Controls.Add($pageStorage)
 $pageStorage.Controls.Add((New-Title '存储与清理' 8))
 
 # ★ 2026-10-24（用户：「给用户说我们会保留一段时间，可以移动到存储与清理里说明吗」）：
-#   把「我们会留多久 / 什么时候才会删 / 程序会不会自己删」这三件事**集中写在页面最上面**，
-#   而且**跟着输入框实时更新** —— 用户改了天数，马上就能看到"那这些会保留多久"，
-#   不用去别的地方找这句话。
+#   把「我们会留多久 / 什么时候才会删 / 程序会不会自己删」说清楚，而且要跟着天数实时更新。
+# ★ 2026-10-26（用户截图：「渲染重叠了…这些详细备注可以改成鼠标移上去再显示吗？
+#   或者在旁边加一个小脚标 ？ 点开看完整解释」）：
+#   原来这里是**4 行说明直接平铺**（固定 78px 高），而实际文字更长 → 压住了下面的
+#   「事件/已处理记录保留（天）」字段（截图实证）。现在拆成两层：
+#     · 页面上只留**一行摘要**（跟着天数实时变）
+#     · 完整解释收进 ? 按钮（悬停看简述、点开看全文）
+#   这样页面干净、不会再重叠，用户需要细节时才展开。
 $lblStorageNotice = New-Object System.Windows.Forms.Label
-$lblStorageNotice.Location = New-Object System.Drawing.Point(22, 36)
-$lblStorageNotice.Size = New-Object System.Drawing.Size(540, 78)
+$lblStorageNotice.Location = New-Object System.Drawing.Point(22, 40)
+$lblStorageNotice.Size = New-Object System.Drawing.Size(500, 22)
 $lblStorageNotice.Font = $fontSmall
 $lblStorageNotice.ForeColor = $cText
 $pageStorage.Controls.Add($lblStorageNotice)
 
+
 function Update-StorageNotice {
-    $k = $txtKeepDays.Text.Trim(); if (-not $k) { $k = '?' }
-    $f = $txtFileKeepDays.Text.Trim(); if (-not $f) { $f = '?' }
-    $lblStorageNotice.Text = @(
-        '我们会保留一段时间，方便你随时回来查看：',
-        "  · 已处理完的记录：保留 $k 天（还没处理过的事件永远不清）",
-        "  · 救援副本 / 崩溃快照：保留 $f 天（超过后只是进「过时」清单 —— 程序不会自己删，要你点「一键删除过时…」）",
-        '  · 点「不需要处理」不产生任何文件（只记一行「已处理」）'
-    ) -join "`r`n"
+    $k = ''; $fk = ''
+    try { if ($txtKeepDays) { $k = $txtKeepDays.Text.Trim() } } catch { }
+    try { if ($txtFileKeepDays) { $fk = $txtFileKeepDays.Text.Trim() } } catch { }
+    if (-not $k) { $k = '?' }
+    if (-not $fk) { $fk = '?' }
+    # 页面只留一行摘要（一眼看到当前天数）；每个字段自己的细节在它旁边的小 ? 里
+    try { $lblStorageNotice.Text = "已处理记录保留 $k 天 · 副本与快照保留 $fk 天" } catch { }
 }
 
-$pageStorage.Controls.Add((New-FieldLabel '事件/已处理记录保留（天）' 22 124))
-$txtKeepDays = New-Input 260 122 80
+# ★ 2026-10-26 第二版（用户：「是在相关需要解释的地方出现小标 ？ 而且不能太大 太突兀」）：
+#   ? 标不再放页面顶部，而是**贴在它解释的那个字段标签右边**。
+$keepLbl = New-LabelWithHelp '事件/已处理记录保留（天）' '事件/已处理记录保留' (@'
+清的是「已经处理完的记录」，按处理时间算。
+还没处理过的事件永远不清——不管放多久，只要你还留着，它就在。
+
+点「不需要处理」只写一行「已处理」，不产生任何文件。
+'@) 22 76
+$pageStorage.Controls.Add($keepLbl.label)
+$pageStorage.Controls.Add($keepLbl.dot)
+$txtKeepDays = New-Input 290 74 80
 $txtKeepDays.Text = [string]$s.storage.keepDays
 $pageStorage.Controls.Add($txtKeepDays)
-$pageStorage.Controls.Add((New-Hint '1–365。清的是「已处理完的记录」（按处理时间算）；还没处理的事件永远不清。' 22 152 540))
+$pageStorage.Controls.Add((New-Hint '1–365 天。' 380 78 180))
 
-$pageStorage.Controls.Add((New-FieldLabel '副本 / 崩溃快照保留（天）' 22 196))
-$txtFileKeepDays = New-Input 260 194 80
+$fkLbl = New-LabelWithHelp '副本 / 崩溃快照保留（天）' '副本 / 崩溃快照保留' (@'
+只影响「一键删除过时」按钮的判断——程序不会自己删这些文件。
+
+超过天数的文件只是进入「过时」清单，要你亲手点删除才会真的消失。
+崩溃快照是内存转储，可能含你当时在处理的内容，所以删不删由你决定。
+'@) 22 130
+$pageStorage.Controls.Add($fkLbl.label)
+$pageStorage.Controls.Add($fkLbl.dot)
+$txtFileKeepDays = New-Input 290 128 80
 $txtFileKeepDays.Text = [string]$s.storage.fileKeepDays
 $pageStorage.Controls.Add($txtFileKeepDays)
-$pageStorage.Controls.Add((New-Hint '1–3650。只影响「一键删除过时」的判断 —— 程序不会自己删这些文件。' 22 224 540))
+$pageStorage.Controls.Add((New-Hint '1–3650 天。' 380 132 180))
 
-$pageStorage.Controls.Add((New-FieldLabel '救援副本目录' 22 268))
-$txtCopyDir = New-Input 22 290 380
+$pageStorage.Controls.Add((New-FieldLabel '救援副本目录' 22 180))
+$txtCopyDir = New-Input 22 202 380
 $txtCopyDir.Text = [string]$s.storage.copyDir
 $pageStorage.Controls.Add($txtCopyDir)
-$btnCopyBrowse = New-Action '浏览…' 408 286 70
+$btnCopyBrowse = New-Action '浏览…' 408 198 70
 $pageStorage.Controls.Add($btnCopyBrowse)
 # ★ 2026-10-25（P1 第 5 项）：copyDir 为空时不只靠一句静态说明 —— 给一条带 ⚠ 的提示。
 #   不设 = 程序不知道副本在哪 → 永远无法清理 → 副本越积越多（用户问过「恢复文件堆积怎么办」）。
@@ -698,11 +863,11 @@ $copyDirHint = if ([string]::IsNullOrWhiteSpace([string]$s.storage.copyDir)) {
 } else {
     '设了它，程序才知道副本在哪、才能帮你清理；不设则每次备份都问你选目录。'
 }
-$pageStorage.Controls.Add((New-Hint $copyDirHint 22 320 540))
+$pageStorage.Controls.Add((New-Hint $copyDirHint 22 234 540))
 
-$btnStoragePreview = New-Action '看看有哪些过时文件' 22 356 170
+$btnStoragePreview = New-Action '看看有哪些过时文件' 22 292 170
 $pageStorage.Controls.Add($btnStoragePreview)
-$btnStorageClean = New-Action '一键删除过时…' 200 356 140
+$btnStorageClean = New-Action '一键删除过时…' 200 292 140
 $pageStorage.Controls.Add($btnStorageClean)
 
 # 说明块跟着两个天数输入框实时更新（用户改了天数就想立刻看到"那会保留多久"）
@@ -714,7 +879,7 @@ $lblStorageInfo = New-Object System.Windows.Forms.Label
 $lblStorageInfo.Text = '（还没检查）'
 $lblStorageInfo.ForeColor = $cMuted
 $lblStorageInfo.Font = $fontSmall
-$lblStorageInfo.Location = New-Object System.Drawing.Point(22, 398)
+$lblStorageInfo.Location = New-Object System.Drawing.Point(22, 334)
 $lblStorageInfo.Size = New-Object System.Drawing.Size(540, 84)
 $pageStorage.Controls.Add($lblStorageInfo)
 
@@ -788,6 +953,75 @@ $btnStorageClean.Add_Click({
         $lblStorageInfo.Text = $txt
     } catch { $lblStorageInfo.Text = "删除失败：$($_.Exception.Message)" }
 })
+
+# ══════════════════════════════════════════════════════════════════════════
+# 帮助页（2026-10-26，用户：「单独的 help 也需要 我觉得 可以在设置里面单独开一篇」）
+#
+# 为什么要有这一页：字段旁边的小 ? 只解释"这一项"，但用户经常需要的是
+# "这套东西整体怎么用、哪些按钮会动我的文件、出了事该看哪儿"。
+# 把这些集中在一页里，比散落在各页的提示更容易被找到。
+# ══════════════════════════════════════════════════════════════════════════
+$pageHelp = New-Object System.Windows.Forms.Panel
+$pageHelp.Dock = 'Fill'
+$pageHelp.BackColor = $cBg
+$pageHelp.Visible = $false
+$body.Controls.Add($pageHelp)
+
+$pageHelp.Controls.Add((New-Title '帮助' 8))
+
+$helpText = @'
+【它是什么】
+  一个只看不动的"报错记录员"。它读 Windows 自己的错误日志和进程退出情况，
+  把技术的东西翻成「发生了什么 / 有多可信 / 下一步做什么 / 该找谁」。
+  它不注入、不改你的程序、不联网、不上传任何东西。
+
+【它会在你电脑上留下什么】
+  · 记录文件：都在这个程序自己的文件夹里（history.jsonl / sentinel-events.jsonl 等）
+  · 崩溃快照（可选，默认关闭）：开了之后崩溃时会把程序内存存一份，放在
+    C:\ProgramData\errwatch\dumps。这是内存转储，可能含你当时在处理的内容，
+    所以默认不开，也建议别人用你的电脑时注意。
+  · 开机自启：两个启动项（看护 + 托盘），卸载时会一并清掉。
+
+【哪些操作会动你的文件】
+  · 「开始应急救援」：只读扫描 + 复制恢复文件，绝不改原件
+  · 「一键删除过时」：真的删 —— 但只删你自己点的，且只在有归属标记的目录里
+  · 其它按钮（刷新/生成修复/看报告）：只读
+  没有"后台偷偷删东西"这种行为。
+
+【托盘在哪儿】
+  Windows 11 默认把新程序的托盘图标放进隐藏区。
+  点任务栏右端的 ^ 展开，把图标拖到外面（或右键设为"始终显示"）就会一直看得见。
+
+【出事该看哪儿】
+  · 主界面底部状态栏：显示本次扫描 / 加载的进展
+  · 设置 → 工具 → 看护健康：看护（哨兵 + 托盘）是否都在跑
+  · errwatch-doctor.ps1：一条命令做完整自检
+  · 最新报告 report-*.md：给懂电脑的人看的那份
+
+【几个诚实的能力边界】
+  · 崩溃快照不保证抓到：杀软/反作弊/程序自带的崩溃处理器可能先接管
+  · 只在监视名单范围内的程序才会被记录；新装的后台程序要崩过一次才被学到
+  · 「已恢复」只说明程序重新跑起来了，不说明崩溃原因查清了
+'@
+
+$rtbHelp = New-Object System.Windows.Forms.RichTextBox
+$rtbHelp.Location = New-Object System.Drawing.Point(22, 38)
+$rtbHelp.Size = New-Object System.Drawing.Size(560, 470)
+$rtbHelp.Anchor = 'Top,Bottom,Left,Right'
+$rtbHelp.ReadOnly = $true
+$rtbHelp.BorderStyle = 'None'
+$rtbHelp.BackColor = $cBg
+$rtbHelp.ForeColor = $cText
+$rtbHelp.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+$rtbHelp.WordWrap = $true
+# ★ 2026-10-26（用户截图实证：「帮助没有下拉 不能看到下面的东西」）：
+#   RichTextBox 在 WordWrap=true 时默认**只给水平条、不给垂直条**，而这一页正文
+#   远高于控件高度 → 后面的内容被切掉，用户既看不到也滚不到。
+#   显式要垂直滚动条（ForcedVertical：即使内容刚好不超也留着条，免得用户
+#   误以为"就这点内容"）。
+$rtbHelp.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::ForcedVertical
+$rtbHelp.Text = $helpText
+$pageHelp.Controls.Add($rtbHelp)
 
 # ── 面板 3：关于 ──────────────────────────────────────────────────────────
 $pageAbout = New-Object System.Windows.Forms.Panel
@@ -996,6 +1230,7 @@ function Show-Page([string]$key) {
     $pageTiming.Visible = ($key -eq 'timing')
     $pageStorage.Visible = ($key -eq 'storage')
     $pageTools.Visible = ($key -eq 'tools')
+    $pageHelp.Visible = ($key -eq 'help')
     $pageAbout.Visible = ($key -eq 'about')
     foreach ($k in $navButtons.Keys) {
         $navButtons[$k].BackColor = if ($k -eq $key) { $cSel } else { $cSide }

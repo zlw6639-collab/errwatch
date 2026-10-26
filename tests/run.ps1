@@ -755,6 +755,20 @@ if (Test-Path -LiteralPath $lcTest) {
 } else {
     Write-Host '  跳过：test-launch.ps1 不存在'
 }
+# ── 监视目标热重载（2026-10-26）：设置里加的必须真的生效 ─────────────────────
+# 用户原话：「看看我加的这个 QQ 它实际作用了吗」—— 当时答案是没作用
+# （watch.extra 只在哨兵启动时读一次）。这条守「改设置后 10 秒内自动生效」。
+Write-Host ""
+$wrTest = Join-Path $PSScriptRoot 'test-watch-reload.ps1'
+$wrFail = $false
+if (Test-Path -LiteralPath $wrTest) {
+    $wrExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    $wrOut = @(& $wrExe -NoProfile -ExecutionPolicy Bypass -File $wrTest 2>&1)
+    $wrOut | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) { $wrFail = $true; Write-Host '  ⚠ 监视目标热重载 FAIL —— 门禁将判失败' -ForegroundColor Red }
+} else {
+    Write-Host '  跳过：test-watch-reload.ps1 不存在'
+}
 # 结果写文件（供历史对比）
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $rulesFile = Resolve-CoreAsset 'rules.json' $root
@@ -776,7 +790,7 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot "last-run.json") -Encoding UTF8
 $report | ConvertTo-Json -Compress | Add-Content (Join-Path $PSScriptRoot 'history.jsonl') -Encoding UTF8
 
-if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $lcFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
+if ($wrong -gt 0 -or $miss -gt 0 -or -not $smokeOk -or $recoverFail -or $metricsFail -or $uiScnFail -or $sentViewFail -or $procHostFail -or $concFail -or $fixFailFail -or $v8Fail -or $spFail -or $npFail -or $lcFail -or $wrFail -or $suiteFail -or $sourceFail -or $doctorFail -or $intentFail -or $lockFail -or $testFail -or -not $tpOk) { exit 1 }
 exit 0
 
 

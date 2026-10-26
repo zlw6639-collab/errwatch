@@ -839,8 +839,24 @@ try {
     }
 } catch {}
 
+# ★ 2026-10-26（用户：「托盘的图标是默认的 不是我们的这个 可以换一个你喜好的吗」）：
+#   原来一直用 `[System.Drawing.SystemIcons]::Application` —— Windows 那个通用灰图标，
+#   在一排图标里既认不出是我们，也不像"看护"。现在用自己的 errwatch.ico
+#   （由 tools\make-icon.ps1 生成：深色圆底 + 一只眼 + 绿瞳，16px 也认得出）。
+#   ★ 绝对路径：托盘可能在别的工作目录下被拉起（计划任务/启动项），
+#     相对路径会静默拿不到图标再退回默认 —— 那就等于没换。
+#   ★ 拿不到就退回系统图标：绝不让读图标失败把托盘搞崩，那条线是用户唯一的通知渠道。
+function Get-TrayIcon {
+    $p = Join-Path $root 'errwatch.ico'
+    try {
+        if (Test-Path -LiteralPath $p) { return New-Object System.Drawing.Icon($p) }
+    } catch { }
+    return [System.Drawing.SystemIcons]::Application
+}
+$script:TrayIcon = Get-TrayIcon
+
 $ni = New-Object System.Windows.Forms.NotifyIcon
-$ni.Icon = [System.Drawing.SystemIcons]::Application
+$ni.Icon = $script:TrayIcon
 $ni.Visible = $true
 $ni.Text = if ($script:trayLastExitAt) { 'errwatch 故障哨兵（上次由你主动退出）' } else { 'errwatch 故障哨兵' }
 

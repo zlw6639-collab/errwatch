@@ -205,6 +205,54 @@ Case 'H 起不来必须说出来（不许静默成功）' {
     $p
 }
 
+# ── I 启动体验：窗口必须比数据先出来 ─────────────────────────────────
+Case 'I 界面：窗口先出来，数据后加载（不许让人以为没启动）' {
+    $p = @()
+    $raw = Get-Content -LiteralPath (Join-Path $root 'errwatch-ui.ps1') -Raw -Encoding UTF8
+    # 抹掉注释再判断（解释这段的注释里也有这些词，直接全文搜会变成死测试）
+    $code = (@($raw -split "`r?`n") | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n"
+
+    # ① 构建期**不许**再无条件同步跑 Update-Grid —— 那正是"点了没反应 7 秒"的原因。
+    #    判据：在 `# ── 启动` 标记之后、`if ($Check)` 之前的那一段里出现 Update-Grid。
+    #    （第一版用了个只认缩进的换行正则，把 `if ($Check){ try{ Update-Grid } }` 也判成违规 ——
+    #      那是**允许**的：自检需要真数据。判据必须能区分「无条件」与「在 if 里」，所以按位置切。）
+    $startAt = $raw.IndexOf('# ── 启动')
+    $checkAt = $raw.IndexOf('if ($Check)')
+    if ($startAt -lt 0) { $p += '找不到「启动」段标记' }
+    elseif ($checkAt -gt $startAt) {
+        $between = ($raw.Substring($startAt, $checkAt - $startAt) -split "`r?`n" |
+            Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n"
+        if ($between -match 'Update-Grid') {
+            $p += '启动段在 if ($Check) 之前就同步跑了 Update-Grid —— 数据会把窗口拖到几秒后才出现'
+        }
+    }
+    # ② -Check 里必须保留同步加载（自检要真数据才能诊断）
+    if ($code -notmatch '(?s)if \(\$Check\)\s*\{.{0,400}?Update-Grid') {
+        $p += '-Check 分支里没有同步 Update-Grid（自检会看到空表）'
+    }
+    # ③ Add_Shown 里必须先 Refresh + DoEvents 让窗口画出来，再加载
+    $shownIdx = $code.IndexOf('$form.Add_Shown(')
+    if ($shownIdx -lt 0) { return @('找不到 Add_Shown') }
+    $shownBlock = $code.Substring($shownIdx, [Math]::Min(1800, $code.Length - $shownIdx))
+    if ($shownBlock -notmatch 'Refresh\(\)') { $p += 'Add_Shown 里没有 Refresh —— 窗口不会先画出来' }
+    if ($shownBlock -notmatch 'DoEvents') { $p += 'Add_Shown 里没有 DoEvents —— 进度刷不出来' }
+    $refreshAt = $shownBlock.IndexOf('Refresh()')
+    $gridAt = $shownBlock.IndexOf('Update-Grid')
+    if ($refreshAt -ge 0 -and $gridAt -ge 0 -and $refreshAt -gt $gridAt) {
+        $p += 'Add_Shown 里 Update-Grid 在 Refresh 之前 —— 顺序反了，窗口还是会被拖住'
+    }
+    # ④ 加载必须有进度钩子（用户要的"进度条"）——否则只是一句静态提示。
+    #    ★ 必须验**调用点**而不是函数名：第一版只搜 'Update-LoadProgress'，
+    #      把调用删掉后函数定义还在，守卫照样绿 —— 是反证把它抓出来的。
+    if ($code -notmatch 'Update-LoadProgress\s+\$script:LoadRow') {
+        $p += '循环里没有调用 Update-LoadProgress（进度不会动）'
+    }
+    if ($code -notmatch 'Complete-LoadProgress') {
+        $p += '加载完成后没有清理进度文字（状态栏会一直挂着"正在加载"）'
+    }
+    $p
+}
+
 Write-Host ''
 if ($fail -eq 0) {
     Write-Host ("一键引导：{0}/{0} 全部通过" -f $pass) -ForegroundColor Green

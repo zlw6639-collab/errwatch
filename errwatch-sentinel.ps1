@@ -320,22 +320,47 @@ $userWatchNames = @()
 if (Get-Command Get-ErrwatchWatchExtra -ErrorAction SilentlyContinue) {
     try { $userWatchNames = @(Get-ErrwatchWatchExtra -Root $stateDir) } catch { $userWatchNames = @() }
 }
-if ($userWatchNames.Count -gt 0) {
-    $haveNames = @()
-    foreach ($w in @($cfg.watch)) { foreach ($m in @($w.match)) { if ($m) { $haveNames += [string]$m } } }
+# 静态配置的原始 watch 组留一份底 —— 重载用户目标时只重建"静态 + 当前用户"，
+# 绝不把用户删掉的条目留在列表里，也绝不改动静态配置本身。
+$script:EwBaseWatch = @($cfg.watch)
+# 两级重载（2026-10-26，用户：「加了定期重载会导致负担吗？可以做成判断改动再重载
+#   和长时间定期重载两种吗」—— 说得对，第一版是无脑每 30 秒读一次文件）：
+#   ① 快速路径：每 10 轮（约 10 秒）只看一眼 settings.json 的**文件戳**（mtime+size）。
+#      实测：stat 0.084 ms/次 · 读全文+解析 0.27 ms/次 · 读+解析+重建列表 0.43 ms/次。
+#      戳没变就什么都不做，连列表都不重建。
+#   ② 慢速兜底：每 10 分钟**无条件**重建一次。不能只靠戳 ——
+#      网络盘 / FAT 的时间精度 / 系统时钟回拨都可能让 mtime 看起来没变，
+#      兜底是唯一能让"用户明明改了却不生效"自愈的机制。
+#   合计：0.084 ms × 8640/天 ≈ 0.7 秒/天（原方案 1.24 秒/天），响应还从 30 秒缩到 10 秒。
+$script:EwSettingsStamp = ''
+$script:EwWatchStampTick = 0
+$script:EwWatchForceTick = 0
+
+# 把「静态名单 + 用户手动加的」合成一份，**返回**结果、由调用方赋值。
+# ★ 2026-10-26 踩到的坑（自测抓到的，不是猜的）：
+#   第一版写成 `function Update-UserWatch { ... $cfg.watch = @($merged) }` ——
+#   在函数里给外层的 $cfg.watch 赋值，实测直接把 watch 列表弄成**空的**
+#   （watched 从 18 掉到 0，等于所有程序都不看了，而心跳照跳、看起来一切正常）。
+#   现在函数只算不写，赋值留在调用方，作用域问题从根上不存在。
+function Get-MergedWatchList {
+    $names = @()
+    if (Get-Command Get-ErrwatchWatchExtra -ErrorAction SilentlyContinue) {
+        try { $names = @(Get-ErrwatchWatchExtra -Root $stateDir) } catch { $names = @() }
+    }
     $merged = New-Object System.Collections.ArrayList
-    foreach ($w in @($cfg.watch)) { [void]$merged.Add($w) }
-    $userAdded = 0
-    foreach ($n in $userWatchNames) {
+    foreach ($w in @($script:EwBaseWatch)) { [void]$merged.Add($w) }
+    $haveNames = @()
+    foreach ($w in @($script:EwBaseWatch)) { foreach ($m in @($w.match)) { if ($m) { $haveNames += [string]$m } } }
+    foreach ($n in $names) {
+        if (-not $n) { continue }
         if ($haveNames -icontains [string]$n) { continue }
         [void]$merged.Add([pscustomobject][ordered]@{ match = @([string]$n); note = '你在设置里手动添加的'; source = 'user' })
-        $userAdded++
+        $haveNames += [string]$n
     }
-    if ($userAdded -gt 0) {
-        if (-not $cfg.PSObject.Properties['watch']) { $cfg | Add-Member -NotePropertyName watch -NotePropertyValue @() -Force }
-        $cfg.watch = @($merged)
-    }
+    return @($merged)
 }
+
+if ($userWatchNames.Count -gt 0) { $cfg.watch = @(Get-MergedWatchList) }
 
 if ($poll -lt 1) { $poll = 1 }
 
@@ -1789,6 +1814,38 @@ try {
             Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue
             Write-Host '收到停止请求，哨兵退出。' -ForegroundColor Yellow
             break
+        }
+        # ★ 2026-10-26（用户实测：「看看我加的这个 QQ 它实际作用了吗」—— 当时答案是没作用）：
+        #   `watch.extra`（设置里手动添加的监视目标）**原来只在启动时读一次**。
+        #   实测时间线：哨兵 11:04 启动、用户 17:59 在设置里加了 QQ →
+        #   造一个假 QQ.exe 起来，watched 完全不变、退出也没记录 —— 用户加的东西形同不存在，
+        #   而界面上写着「我加的（可移除）」，等于对他说谎。
+        #
+        #   两级重载（第二版，采纳用户建议「判断改动再重载 + 长时间定期兜底」）：
+        #     ① 每 10 轮看一眼 settings.json 的**文件戳**，变了才真读（stat 0.084ms vs 读+解析 0.27ms）
+        #     ② 每 10 分钟无条件重建一次，兜底"戳没变但内容变了"的情况（网络盘/FAT/时钟回拨）
+        #   ★ 只动「用户自己加的那部分」，静态配置里的条目一律不碰。
+        $script:EwWatchStampTick++
+        if ($script:EwWatchStampTick -ge 10) {
+            $script:EwWatchStampTick = 0
+            try {
+                $sp = Join-Path $stateDir 'settings.json'
+                $stampNow = ''
+                if (Test-Path -LiteralPath $sp) {
+                    $fi = Get-Item -LiteralPath $sp -ErrorAction SilentlyContinue
+                    if ($fi) { $stampNow = "$($fi.LastWriteTimeUtc.Ticks)|$($fi.Length)" }
+                }
+                if ($stampNow -ne $script:EwSettingsStamp) {
+                    $script:EwSettingsStamp = $stampNow
+                    $cfg.watch = @(Get-MergedWatchList)
+                    $script:EwWatchForceTick = 0
+                }
+            } catch { }
+        }
+        $script:EwWatchForceTick++
+        if ($script:EwWatchForceTick -ge 600) {
+            $script:EwWatchForceTick = 0
+            try { $cfg.watch = @(Get-MergedWatchList) } catch { }
         }
         try { [void](Invoke-Check) } catch {
             $errFile = Join-Path $stateDir 'sentinel-error.log'

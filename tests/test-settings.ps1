@@ -415,17 +415,22 @@ Case 'M2 清理只删过时文件，新文件一个都不许动' {
 Case 'N 存储页把「保留多久」写在页首，且天数跟着输入框走' {
     $p = @()
     $src = Get-Content -LiteralPath (Join-Path $root 'errwatch-settings-ui.ps1') -Raw -Encoding UTF8
-    foreach ($need in @('Update-StorageNotice', '我们会保留一段时间', '程序不会自己删')) {
+    # ★ 2026-10-26 改版：为修「说明文字压住输入框」的重叠，页首从 4 行说明改成
+    #   **一行摘要**，完整解释收进字段旁边的小 ?。断言随之改到新结构（不是放宽，
+    #   而是继续守同样的两件事：说明在页首、天数真的跟输入框走）。
+    foreach ($need in @('Update-StorageNotice', '已处理记录保留', '副本与快照保留')) {
         if ($src -notmatch [regex]::Escape($need)) { $p += "存储页缺少保留说明：$need" }
     }
-    # 天数必须是插值进来的，不能写死
-    foreach ($need in @('保留 $k 天', '保留 $f 天')) {
+    # 天数必须是插值进来的，不能写死（$k / $fk 分别是两个输入框的值）
+    foreach ($need in @('保留 $k 天', '保留 $fk 天')) {
         if (-not $src.Contains($need)) { $p += "说明里的天数没有跟着输入框走（缺 `"$need`"）" }
     }
     # 输入框要真的绑上刷新
     if ($src -notmatch 'txtKeepDays\.Add_TextChanged' -or $src -notmatch 'txtFileKeepDays\.Add_TextChanged') {
         $p += '改了天数说明不会刷新（没有绑 TextChanged）'
     }
+    # 完整解释仍在（只是挪进了 ? 里）——「程序不会自己删」这句承诺不能因改版丢掉
+    if ($src -notmatch '程序不会自己删') { $p += '完整说明里的关键承诺「程序不会自己删」丢了' }
     return $p
 }
 
