@@ -160,6 +160,49 @@ Case 'G .gitignore 必须覆盖 pack-filter 的每一个状态文件名（防本
     $p
 }
 
+# ── README 的口径必须与代码一致（2026-10-26 外部审计 P1-2 / P2-1）─────────────
+# 审计原话：「守卫只管了 doctor，漏了 README」—— README 说「注册每 10 分钟」，
+# 而 register-watch.ps1 默认 2 分钟；apps.json 说 6 个，实际 8 个。
+# 这类漂移专门骗"照着文档核对"的人，所以必须由测试盯住，而且**数字要动态取**：
+# 写死期望值的守卫，下次改代码时又会变成第二处漂移。
+Case 'H README 的口径与代码一致（数字漂移 / 过期文案 / 引用了包里没有的文件）' {
+    $p = @()
+    $readmePath = Join-Path $root 'README.md'
+    if (-not (Test-Path -LiteralPath $readmePath)) { return @('没有 README.md') }
+    $readme = Get-Content -LiteralPath $readmePath -Raw -Encoding UTF8
+
+    # ① apps.json 条目数：README 里两处提法都要对得上实际配置
+    $appsCfg = Get-Content -LiteralPath (Join-Path $root 'core\apps.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $n = @($appsCfg.apps).Count
+    $hits = 0
+    foreach ($re in @('apps\.json\s*\|\s*(\d+)\s*个软件档案', 'apps\.json\s+(\d+)\s*个软件档案')) {
+        foreach ($m in [regex]::Matches($readme, $re)) {
+            $hits++
+            if ([int]$m.Groups[1].Value -ne $n) { $p += "README 说 $($m.Groups[1].Value) 个软件档案，实际 $n 个" }
+        }
+    }
+    if ($hits -eq 0) { $p += 'README 里找不到 apps.json 的条目数说明（漂移了也没人守）' }
+
+    # ② 过期文案：哨兵每 2 分钟，不是 10 分钟（doctor 早改过，README 漏了）
+    if ($readme -match '每\s*10\s*分钟') { $p += 'README 还写着「每 10 分钟」（实际哨兵每 2 分钟）' }
+
+    # ③ 引用了"包里没有"的内部材料，必须同时说明它不进发行包
+    $devOnly = @('发布流程.md', '开源发布清单.md', '审计索引.md')
+    foreach ($doc in $devOnly) {
+        if ($readme -match [regex]::Escape($doc)) {
+            if ($readme -notmatch '不进发行包|只存在于开发仓') {
+                $p += "README 引用 $doc 却没说它是开发仓材料 —— 用户拿到 user 包按图索骥会落空"
+            }
+        }
+    }
+
+    # ④ 下载说明必须点明"伴随文件在包外，要一起拿"
+    if ($readme -match '\.zip\.sha256' -and $readme -notmatch '要一起拿') {
+        $p += 'README 讲了 .zip.sha256，却没提醒「四个文件要一起下载」（审计 P1-1：只发 zip 时校验执行不了）'
+    }
+    return $p
+}
+
 Write-Host ''
 Write-Host ("发行包卫生测试: PASS $pass / FAIL $fail") -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Yellow' })
 if ($fail -gt 0) {

@@ -870,6 +870,50 @@ $ni.Icon = $script:TrayIcon
 $ni.Visible = $true
 $ni.Text = if ($script:trayLastExitAt) { 'errwatch 故障哨兵（上次由你主动退出）' } else { 'errwatch 故障哨兵' }
 
+# ★ 2026-10-26（用户第五次说「还是没有」，截图里连 `^` 面板都没有它）—— 最后一环：
+#   Windows 11 把**新出现的托盘图标默认设为"不显示"**：不在任务栏、也不在 `^` 面板，
+#   而是躺在「设置 → 个性化 → 任务栏 → 其他系统托盘图标」里，开关是关的。
+#   程序没有"请求显示"的 API，唯一的机器可做的是写这个键（HKCU，不需要管理员）：
+#     HKCU\Control Panel\NotifyIconSettings\<id>\IsPromoted = 1
+#   本机实测：置 1 之后那个绿色小方块立刻出现在任务栏（不用重启 explorer）。
+#   判据/匹配放 core\tray-icon.ps1（可单测），这里只负责调用与留痕。
+$script:TrayIconPromotedKeys = @()
+$script:TrayIconPromoteSkipped = ''
+try {
+    $trayIconCore = Join-Path $Root 'core\tray-icon.ps1'
+    if (Test-Path -LiteralPath $trayIconCore) { . $trayIconCore }
+    $hostExe = ''
+    try { $hostExe = [System.IO.Path]::GetFileName([System.Diagnostics.Process]::GetCurrentProcess().Path) } catch { }
+    if (-not $hostExe) { $hostExe = 'pwsh.exe' }
+    $niBase = 'HKCU:\Control Panel\NotifyIconSettings'
+    if (-not (Test-Path $niBase)) {
+        $script:TrayIconPromoteSkipped = 'no-notifyiconsettings-key'
+    } elseif (Get-Command Test-ErrwatchTrayHostPath -ErrorAction SilentlyContinue) {
+        foreach ($k in @(Get-ChildItem $niBase -ErrorAction SilentlyContinue)) {
+            $kv = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+            $exe = [string]$kv.ExecutablePath
+            if (-not (Test-ErrwatchTrayHostPath -Path $exe -HostExe $hostExe)) { continue }
+            if ([int]$kv.IsPromoted -eq 1) { continue }
+            try {
+                New-ItemProperty -Path $k.PSPath -Name 'IsPromoted' -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -Path $k.PSPath -Name 'IsPromotedInitialized' -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue | Out-Null
+                $script:TrayIconPromotedKeys += [string]$k.PSChildName
+            } catch { $script:TrayIconPromoteSkipped = 'write-failed' }
+        }
+    }
+} catch { }
+# 留痕：以后有人问"到底有没有去开那个开关"，这里能回答（含"没开"的原因）
+try {
+    $ev = [ordered]@{
+        at        = (Get-Date).ToString('o')
+        pid       = $PID
+        event     = 'icon-promotion'
+        promoted  = @($script:TrayIconPromotedKeys)
+        skipped   = [string]$script:TrayIconPromoteSkipped
+    } | ConvertTo-Json -Compress -Depth 4
+    Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $ev -Encoding UTF8
+} catch { }
+
 # ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）—— 第二个真根因：
 #   托盘**进程一直在跑**（launch 看到 trayBefore=1 就不重启，这是对的），但**图标不在**。
 #   原因：explorer.exe 重启 / 任务栏重建时，Windows 会把所有 NotifyIcon 图标统统丢掉，
@@ -1048,8 +1092,8 @@ $ni.ContextMenuStrip = $menu
 #   开机自启不带这个开关，所以不会每次开机都打扰。
 if ($Announce) {
     try {
-        $ni.ShowBalloonTip(4000, '报错看护已就位',
-            '看护在后台记录崩溃。图标在右下角通知区 —— 如果没看见，点一下 ^ 展开，把它拖到任务栏上就固定了。',
+        $ni.ShowBalloonTip(6000, '报错看护已就位',
+            '看护在后台记录崩溃。任务栏右下角那个「绿色小眼睛」就是我。如果没看见：点 ^ 展开，或到「设置 → 个性化 → 任务栏 → 其他系统托盘图标」里把「PowerShell 7」打开。',
             [System.Windows.Forms.ToolTipIcon]::Info)
         try {
             $line = [ordered]@{ at = (Get-Date).ToString('o'); pid = $PID; event = 'tray-announced' } | ConvertTo-Json -Compress

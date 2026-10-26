@@ -45,7 +45,7 @@ errwatch/
   core/                        核心：不依赖运行环境（纯数据 + 纯逻辑）
     analyze.ps1                  规则匹配 / 人话翻译 / 安全模式判断（全项目唯一实现）
     rules.json                   34 条通用规则（正则 → 人话 → 建议 → 坑号）
-    apps.json                    6 个软件档案（匹配特征 / 日志位置 / 专属规则）
+    apps.json                    8 个软件档案（匹配特征 / 日志位置 / 专属规则）
     noise.json                   降噪（ignore / quiet / 聚合窗口）
     events.json                  事件 ID → 人话（蓝屏、磁盘错误、服务失败…）
     rules-sigma.json             从 Sigma 规则转换来的规则（tools\sigma-convert.ps1 生成）
@@ -92,8 +92,16 @@ errwatch/
 ```
 
 > 这两个入口**都会把三件事一起带起来**：常驻哨兵（记录崩溃）+ 通知托盘（弹气泡）+ 主界面。
-> 托盘图标在右下角通知区；Win11 默认把新图标折叠进 `^`，点开拖到任务栏就能固定。
+> 托盘图标是右下角那个「绿色小眼睛」。Win11 起新图标**默认不显示**（既不在任务栏也不在 `^` 里），
+> 所以首次启动时会自动替你打开「设置 → 个性化 → 任务栏 → 其他系统托盘图标」里的开关；
+> 万一还是看不到，去那里手动打开「PowerShell 7」。
 > 主界面左下角状态栏也会写「⚠ 托盘没在跑」—— 界面看着正常但其实没有气泡，是最容易骗人的一种。
+>
+> **解压到稳定目录再跑**（例如 `D:\Tools\errwatch`）。别放在 `QQ缓存` / `程序下载` / `Temp` 这类会被清理的目录：
+> 那些目录一清，`history.jsonl`、报告、设置会一起没（程序本身能整体搬走，靠 `$PSScriptRoot` 定位）。
+>
+> 刚解压时 `history.jsonl` / `settings.json` / `last-check.json` / `sentinel-status.json` / `report-*.md`
+> **都还不存在，这是正常的** —— 跑一次就有了。doctor 这时报「没有计划任务」也正常：自启要你自己决定装不装。
 
 或者命令行：
 
@@ -115,6 +123,12 @@ pwsh -File errwatch-notify.ps1      # 只报新错误（有错弹窗，无错静
 | 构建可复现 | ✅ 无构建步骤，改完源码直接就能跑 |
 | 哈希 / 清单 | ✅ `*.zip.sha256`（整包）+ `release.json`（逐文件）+ `*.sbom.json`（成分） |
 | 代码签名证书 | ❌ **不需要** —— 原因见本节末尾 |
+
+> ⚠️ **下载时四个文件要一起拿**：`errwatch-<版本>.zip`、`.zip.sha256`、`.zip.release.json`、`.zip.sbom.json`
+> （`.zip.verify.json` 可选，是打包时自检的报告）。
+> **只把 zip 拷走 = 下面两步一步都执行不了** —— 前提是「伴随文件在包外」，
+> 这是刻意的设计（包内文件若记录自己的哈希，一改就全对不上，等于自欺）。
+> 2026-10-26 的审计就是这么被坑的：包本身没问题，交付时只发了 zip，于是「可验证」变成空话。
 
 ### 1. 校验整包 SHA-256（必做）
 
@@ -215,7 +229,7 @@ git -C repo verify-tag v2026.10.23     # 没有 GPG 签名时会提示无签名�
 | `runners\L3-collect.cmd <输出目录> <目标盘>` | L3 取证采集（纯 cmd，WinRE / WinPE 可跑） |
 | `errwatch-fix.ps1 -Action log-rotate -Path x.log -Commit` | 执行修复（默认演练；安全模式需 `-AllowSafeMode`） |
 | `errwatch-report.ps1 -App x -Message "..."` | 主动上报不写事件日志的报错 |
-| `register-watch.ps1` | 注册每 10 分钟自动检查 |
+| `register-watch.ps1` | 注册每 2 分钟自动检查（`-IntervalMinutes` 可改） |
 
 ## 文件说明
 
@@ -235,7 +249,7 @@ git -C repo verify-tag v2026.10.23     # 没有 GPG 签名时会提示无签名�
 | `runners\VentoyAutoRun.bat` | **自动采集**：Ventoy 在 WinPE 启动时自动调用它（1.0.55+ 注入机制） |
 | `runners\USB-自动采集.md` | 能自动到哪一步、做不到什么、三条社区路线（Ventoy / 预制 PE / SystemRescue） |
 | `errwatch-bundle-analyze.ps1` | 证据包分析器：只吃证据包，可在任意机器上跑 |
-| `core\apps.json` | 6 个软件档案：匹配特征、日志位置、专属规则、可用性检测 |
+| `core\apps.json` | 8 个软件档案：匹配特征、日志位置、专属规则、可用性检测 |
 | `core\noise.json` | 降噪：ignore（完全忽略）/ quiet（进报告不弹窗）/ 聚合窗口 |
 | `baseline.json` | 哈希基线（自动生成，别手改） |
 | `history.jsonl` | 历史库（每次采集自动追加，按时间+来源+ID 去重） |
@@ -288,7 +302,8 @@ errwatch **知道自己是否在安全模式**（2026-10-22 加入）。各处�
 | 服务 / 驱动 / DISM 类修复 | ⚠️ 可能失败 | 目标组件本就没加载 |
 
 **自测开关**：设 `ERRWATCH_SAFEMODE=1` 可让上述脚本按安全模式处理。
-它**只收紧提示与权限判断，不放宽任何东西**，因此不构成后门（见 `tests/audit-safemode-20261022.md`）。
+它**只收紧提示与权限判断，不放宽任何东西**，因此不构成后门。
+（审计报告在开发仓的 `tests\audit-safemode-*.md`，不进发行包；可复跑的门禁是 `tests\run.cmd`。）
 
 ## 环境指纹（分层）
 
@@ -349,8 +364,7 @@ pwsh -File errwatch-baseline.ps1 -Create
 | **规则许可分离** | `core\rules-sigma.json` | 来自 Sigma，受 **DRL 1.1**，**不属于 MIT**；每条带 `author`/`uri`/`license` |
 | **免责声明** | `免责声明.md` | 能力边界 / 数据行为（**已静态验证不联网**）/ 修复风险 / 责任限制 |
 | **贡献指南** | `CONTRIBUTING.md` | 规则模板、第三方材料要求、DCO 声明 |
-| **发布流程** | `发布流程.md` | 权属确认 → 回归 → BOM → 打包 → 哈希 → 审计记录 |
-| **开源发布清单** | `开源发布清单.md` | GitHub Release 步骤：建仓库 / 上传哪几个文件 / 正文模板 |
 
-> ⚠️ 发布前必读 `发布流程.md` 第 0 步「权属确认」——这一条只有维护者本人能答。
-> 审计与整改记录见 `tests\审计索引.md`（先看索引，再看具体报告）。
+> 维护者向的材料（`发布流程.md` / `开源发布清单.md` / `tests\审计索引.md` 与各份 audit 报告）
+> **只存在于开发仓，不进发行包** —— 拿到 user 包的人看不到它们，这是有意的：
+> 那些是过程记录，不是使用文档。发布前的「权属确认」等步骤见开发仓 `发布流程.md`。

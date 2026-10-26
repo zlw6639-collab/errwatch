@@ -335,7 +335,13 @@ Case 'L 主界面自己报告「托盘没在跑」（不许界面正常但没有
 Case 'M 所有双击入口都走 launch（不许某个入口只启界面）' {
     $p = @()
     $gbk = [System.Text.Encoding]::GetEncoding(936)
-    $entries = @('启动报错看护.bat', '① 双击打开报错看护.bat', '启动报错看护.vbs')
+    # ★ 2026-10-26（外部审计 P3「入口编号断档」）：原来有 ①③ 两个带编号的入口，
+    #   没有 ②，而 ① 又与「启动报错看护.bat」功能重复 —— 对不懂技术的人是纯干扰。
+    #   现在收敛成两个**启动器**（卸载器不在这一条里：它本来就不该拉起看护）。
+    $entries = @('启动报错看护.vbs', '启动报错看护.bat')
+    # 卸载器存在、且不能是启动器（防有人把它也改成走 launch）
+    $uninst = Join-Path $root '卸载报错看护.cmd'
+    if (-not (Test-Path -LiteralPath $uninst)) { $p += '缺少入口：卸载报错看护.cmd' }
     foreach ($n in $entries) {
         $f = Join-Path $root $n
         if (-not (Test-Path -LiteralPath $f)) { $p += "缺少入口：$n"; continue }
@@ -376,6 +382,34 @@ Case 'N 托盘已在跑时，双击要真的让它重挂图标（remount flag）
         $tblk = $tsrc.Substring([Math]::Max(0, $tidx - 300), [Math]::Min(1200, $tsrc.Length - [Math]::Max(0, $tidx - 300)))
         if ($tblk -notmatch 'Visible = \$false') { $p += '重挂没有先 Visible=$false（shell 不会重新接纳）' }
     }
+    return $p
+}
+
+# ── Windows 11 默认把新托盘图标设为"不显示"（2026-10-26 最后一环）────────────
+# 用户第五次说「还是没有」，截图里连 `^` 面板都没有它。
+# 实测：NotifyIconSettings 里 pwsh.exe 那项 IsPromoted 是空（= 隐藏）；
+#   置 1 之后图标立刻出现在任务栏。这一条只能在程序里自动做，否则用户永远找不到。
+Case 'O 托盘要把自己的图标标成「显示在任务栏」（Win11 默认隐藏新图标）' {
+    $p = @()
+    $core = Join-Path $root 'core\tray-icon.ps1'
+    if (-not (Test-Path -LiteralPath $core)) { return @('缺少 core\tray-icon.ps1（匹配规则应可单测）') }
+    . $core
+    # 匹配规则：按**宿主文件名**判断（托盘图标归属的是 pwsh.exe，不是我们的脚本名）
+    if (-not (Test-ErrwatchTrayHostPath -Path 'C:\Program Files\PowerShell\7\pwsh.exe' -HostExe 'pwsh.exe')) {
+        $p += 'pwsh.exe 应被认作宿主'
+    }
+    if (Test-ErrwatchTrayHostPath -Path 'C:\Program Files\PowerShell\7\pwsh.exe' -HostExe 'powershell.exe') {
+        $p += 'pwsh.exe 不该被当成 powershell.exe'
+    }
+    if (Test-ErrwatchTrayHostPath -Path 'C:\other\tool.exe' -HostExe 'pwsh.exe') { $p += '别的程序不该被认成宿主' }
+    if (Test-ErrwatchTrayHostPath -Path '' -HostExe 'pwsh.exe') { $p += '空路径应为 false' }
+
+    $tsrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-tray.ps1') -Raw -Encoding UTF8
+    if ($tsrc -notmatch 'NotifyIconSettings') { $p += '托盘没有去开 Win11 的「其他系统托盘图标」开关（NotifyIconSettings）' }
+    if ($tsrc -notmatch "IsPromoted") { $p += '没有写 IsPromoted' }
+    if ($tsrc -notmatch 'icon-promotion') { $p += '没有留痕（以后无法回答"到底有没有去开那个开关"）' }
+    # 气泡必须说清"长什么样" —— 16px 的图标用户认不出来
+    if ($tsrc -notmatch '绿色小眼睛') { $p += '气泡没有说明图标长什么样（用户认不出那个小图标）' }
     return $p
 }
 
