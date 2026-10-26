@@ -131,7 +131,10 @@ if ($st.trayBefore -eq 0) {
     if (-not (Test-Path -LiteralPath $trayScript)) {
         $st.trayStart = 'missing'
     } else {
-        if (Start-NoWindow $trayScript @()) { $st.trayStart = 'started' }
+        # ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）：
+        #   带 -Announce —— 托盘起来后弹一次"我在右下角（可能在 ^ 里）"。
+        #   用户真正看不见的是**图标**，不是进程；不说这一句，他就以为没挂起托盘。
+        if (Start-NoWindow $trayScript @('-Announce')) { $st.trayStart = 'started' }
         else { $st.trayStart = 'failed: 启动调用失败' }
     }
 } else {

@@ -40,7 +40,12 @@ param(
     #   单实例锁改成**整机唯一**，不再按安装目录区分 —— 用户的心智模型是
     #   "一个程序一个图标"，出现三个就是 bug（哪怕它们来自不同目录）。
     #   测试要跑独立实例时**显式**传 -InstanceName（与哨兵的机制一致）。
-    [string]$InstanceName = ''
+    [string]$InstanceName = '',
+    # ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）：
+    #   由 errwatch-launch.ps1 拉起时带上这句 —— 托盘就位后弹一次气泡，告诉用户
+    #   **图标在哪**（Win11 默认把新图标折叠进 ^，用户看不到就以为没起来）。
+    #   开机自启（启动文件夹的 .vbs）不带这个开关，所以不会每次开机都弹。
+    [switch]$Announce
 )
 
 $ErrorActionPreference = 'Stop'
@@ -865,6 +870,61 @@ $ni.Icon = $script:TrayIcon
 $ni.Visible = $true
 $ni.Text = if ($script:trayLastExitAt) { 'errwatch 故障哨兵（上次由你主动退出）' } else { 'errwatch 故障哨兵' }
 
+# ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）—— 第二个真根因：
+#   托盘**进程一直在跑**（launch 看到 trayBefore=1 就不重启，这是对的），但**图标不在**。
+#   原因：explorer.exe 重启 / 任务栏重建时，Windows 会把所有 NotifyIcon 图标统统丢掉，
+#   而进程毫发无损 —— 于是"进程在跑"和"用户看得见图标"是两件事。
+#   系统为此定义了 TaskbarCreated 广播消息：任务栏重建完成后会发一次，
+#   收到就必须把图标重新挂上去。没有这段代码，图标只在托盘进程启动的那一次有效。
+#
+#   ★ 这条是本项目第三次栽在同一个坑上：**"状态对"不等于"用户看得见"**
+#     （服务假活、界面看着正常其实没在看护、现在是托盘进程活着但图标没了）。
+$script:TaskbarWatcher = $null
+try {
+    if (-not ('EwUi.TaskbarWatcher' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+
+namespace EwUi {
+  public class TaskbarWatcher : NativeWindow {
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern int RegisterWindowMessage(string lpString);
+    private int _msg;
+    public event EventHandler TaskbarCreated;
+    public TaskbarWatcher() {
+      _msg = RegisterWindowMessage("TaskbarCreated");
+      var cp = new CreateParams();
+      cp.Caption = "EwUiTaskbarWatcher";
+      CreateHandle(cp);
+    }
+    protected override void WndProc(ref Message m) {
+      if (_msg != 0 && m.Msg == _msg) {
+        var h = TaskbarCreated;
+        if (h != null) { try { h(this, EventArgs.Empty); } catch { } }
+      }
+      base.WndProc(ref m);
+    }
+  }
+}
+"@ -ErrorAction Stop
+    }
+    $script:TaskbarWatcher = New-Object EwUi.TaskbarWatcher
+    $script:TaskbarWatcher.add_TaskbarCreated({
+        try {
+            # 任务栏重建了：必须先关再开，shell 才会重新接纳这个图标
+            $ni.Visible = $false
+            $ni.Visible = $true
+            $ni.Text = 'errwatch 故障哨兵（任务栏重启后已重新挂上）'
+            try {
+                $line = [ordered]@{ at = (Get-Date).ToString('o'); pid = $PID; event = 'taskbar-created-remount' } | ConvertTo-Json -Compress
+                Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $line -Encoding UTF8
+            } catch { }
+        } catch { }
+    })
+} catch { }
+
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 # 第一项永远是「监视状态」：让用户一眼看出工具自己还活着没
 $miHealth  = $menu.Items.Add('监视状态：?')
@@ -981,6 +1041,22 @@ $miRecover.Add_Click({
     } catch {}
 })
 $ni.ContextMenuStrip = $menu
+
+# ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）：
+#   由 launch 拉起时（-Announce）说一句"我在哪" —— 因为 Win11 默认把新出现的
+#   通知区图标折叠进 `^`：进程明明起来了，用户抬头却只看到任务栏上什么都没有。
+#   开机自启不带这个开关，所以不会每次开机都打扰。
+if ($Announce) {
+    try {
+        $ni.ShowBalloonTip(4000, '报错看护已就位',
+            '看护在后台记录崩溃。图标在右下角通知区 —— 如果没看见，点一下 ^ 展开，把它拖到任务栏上就固定了。',
+            [System.Windows.Forms.ToolTipIcon]::Info)
+        try {
+            $line = [ordered]@{ at = (Get-Date).ToString('o'); pid = $PID; event = 'tray-announced' } | ConvertTo-Json -Compress
+            Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $line -Encoding UTF8
+        } catch { }
+    } catch { }
+}
 
 $deadline = if ($DurationSec -gt 0) { (Get-Date).AddSeconds($DurationSec) } else { [datetime]::MaxValue }
 $lastCount = -1

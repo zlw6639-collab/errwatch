@@ -31,6 +31,9 @@ sentinel-status.json
 settings.json
 tray-acks.jsonl
 tray-error.log
+# 托盘自愈记录：explorer 重启后重挂图标 / 由 launch 拉起时的"已就位"提示。
+# 含本机 PID 与时间戳 → 与 tray-fallback 同一类，绝不进公开仓库（也不进包）。
+tray-events.log
 tray-exit.json
 tray-exit.jsonl
 tray-fallback.jsonl

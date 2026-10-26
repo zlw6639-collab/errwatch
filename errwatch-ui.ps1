@@ -220,6 +220,8 @@ try {
 } catch { }
 $script:SentinelTotalLines = 0
 $script:SentinelWindow = $null
+$script:TrayAlive = $true
+$script:TrayAliveAt = [datetime]::MinValue
 $script:HistBadLines = 0
 function Get-HistoryRows {
     if (-not (Test-Path $HistFile)) { return @() }
@@ -2044,7 +2046,22 @@ function Show-Filtered {
             } catch { $limitTxt = '' }
         }
         if ($win -and $win.Truncated) { $lblStatusL.Cursor = 'Hand' } else { $lblStatusL.Cursor = 'Default' }
-        $lblStatusL.Text = "记录 $($script:Rows.Count)/$($script:AllRows.Count) 条 · 没说明 $pending 条 · 规则 $(Get-RulesCount) 条$filterTxt$last$hidden$syncTxt$limitTxt"
+        # ★ 2026-10-26（用户：「双击启动 还是没有自动挂起托盘」）：
+        #   "界面看着正常、其实没有气泡提醒"是这一类里最容易骗人的一种 ——
+        #   状态栏必须自己说出来。托盘进程检测很贵（CIM 查询），30 秒缓存一次。
+        $trayTxt = ''
+        try {
+            $nowTs = Get-Date
+            if (([datetime]$script:TrayAliveAt).AddSeconds(30) -lt $nowTs) {
+                $script:TrayAliveAt = $nowTs
+                $script:TrayAlive = $true
+                if (Get-Command Test-ErrwatchHostRunning -ErrorAction SilentlyContinue) {
+                    $script:TrayAlive = [bool](Test-ErrwatchHostRunning -Root $script:Root -Role 'tray')
+                }
+            }
+            if (-not $script:TrayAlive) { $trayTxt = ' · ⚠ 托盘没在跑（不会有气泡提醒；双击「报错看护」会补起来）' }
+        } catch { }
+        $lblStatusL.Text = "记录 $($script:Rows.Count)/$($script:AllRows.Count) 条 · 没说明 $pending 条 · 规则 $(Get-RulesCount) 条$filterTxt$last$hidden$syncTxt$limitTxt$trayTxt"
         $lblStatusL.ForeColor = $cText2
     }
 }

@@ -284,6 +284,72 @@ Case 'I 界面：窗口先出来，数据后加载（不许让人以为没启动
     $p
 }
 
+# ── 托盘图标真的会出现在通知区（2026-10-26，用户：「双击启动 还是没有自动挂起托盘」）──
+# 查清的事实：托盘**进程一直在跑**（launch 因此不重启，是对的），但**图标不在** ——
+#   explorer.exe 重启 / 任务栏重建时 Windows 会把所有 NotifyIcon 图标丢掉，进程毫发无损。
+# 这是本项目第三次栽在「状态对 ≠ 用户看得见」上，所以三条都要有断言：
+#   ① 托盘必须监听 TaskbarCreated（否则图标只在启动那一次有效）
+#   ② launch 拉起托盘时必须带 -Announce（告诉用户图标在 ^ 里）
+#   ③ 主界面状态栏必须自行报告「托盘没在跑」（界面看着正常其实没气泡，最难发现）
+Case 'J 任务栏重启后托盘图标能自己回来（TaskbarCreated）' {
+    $p = @()
+    $traySrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-tray.ps1') -Raw -Encoding UTF8
+    if ($traySrc -notmatch 'TaskbarCreated') { $p += '托盘没有监听 TaskbarCreated —— explorer 重启后图标消失且不会回来' }
+    if ($traySrc -notmatch 'RegisterWindowMessage') { $p += '没有 RegisterWindowMessage("TaskbarCreated")' }
+    if ($traySrc -notmatch 'add_TaskbarCreated') { $p += '没有绑定 TaskbarCreated 事件（注册了消息但没处理）' }
+    # 重挂必须是"先关再开"：只设 Visible=$true 对已经丢掉的图标无效
+    $tIdx = $traySrc.IndexOf('add_TaskbarCreated')
+    if ($tIdx -lt 0) { return $p }
+    $block = $traySrc.Substring($tIdx, [Math]::Min(900, $traySrc.Length - $tIdx))
+    if ($block -notmatch 'Visible = \$false') { $p += '重挂时没有先 Visible=$false —— shell 不会重新接纳这个图标' }
+    if ($block -notmatch 'Visible = \$true') { $p += '重挂时没有 Visible=$true' }
+    return $p
+}
+
+Case 'K launch 拉起托盘时告诉用户「图标在哪」（-Announce）' {
+    $p = @()
+    $lsrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-launch.ps1') -Raw -Encoding UTF8
+    if ($lsrc -notmatch "Start-NoWindow \`$trayScript \@\('-Announce'\)") { $p += 'launch 启动托盘没带 -Announce（用户看不到就以为没挂起）' }
+    $tsrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-tray.ps1') -Raw -Encoding UTF8
+    if ($tsrc -notmatch '\[switch\]\$Announce') { $p += '托盘没有 -Announce 参数' }
+    if ($tsrc -notmatch 'if \(\$Announce\)') { $p += '托盘没有用到 -Announce' }
+    return $p
+}
+
+Case 'L 主界面自己报告「托盘没在跑」（不许界面正常但没有气泡）' {
+    $p = @()
+    $src = Get-Content -LiteralPath (Join-Path $root 'errwatch-ui.ps1') -Raw -Encoding UTF8
+    if ($src -notmatch "Test-ErrwatchHostRunning -Root \`$script:Root -Role 'tray'") { $p += '主界面没有检测托盘进程' }
+    if ($src -notmatch '托盘没在跑') { $p += '状态栏没有「托盘没在跑」的文案' }
+    # 进程检测很贵（CIM）：必须缓存，否则每次筛选都查一遍
+    if ($src -notmatch '\$script:TrayAliveAt') { $p += '托盘状态没有缓存（CIM 查询会拖慢每次刷新）' }
+    return $p
+}
+
+# ── 所有"双击入口"必须走同一条链（2026-10-26 的第三个根因）──────────────────
+# 查出来的事实：`启动报错看护.bat` 当时**只启界面**（直接跑 errwatch-ui.ps1），
+# 而 README 的「快速开始」恰恰教用户双击这个 bat —— 于是双击之后只有孤零零一个界面：
+# 哨兵没在记录、托盘没有图标，界面却看着一切正常。
+# 判据：任何入口要么转给 启动报错看护.vbs，要么自己调 errwatch-launch.ps1；
+# 绝不允许直接拉起 errwatch-ui.ps1（那就是"只开界面"的老路）。
+Case 'M 所有双击入口都走 launch（不许某个入口只启界面）' {
+    $p = @()
+    $gbk = [System.Text.Encoding]::GetEncoding(936)
+    $entries = @('启动报错看护.bat', '① 双击打开报错看护.bat', '启动报错看护.vbs')
+    foreach ($n in $entries) {
+        $f = Join-Path $root $n
+        if (-not (Test-Path -LiteralPath $f)) { $p += "缺少入口：$n"; continue }
+        $txt = $gbk.GetString([System.IO.File]::ReadAllBytes($f))
+        $hasLaunch = ($txt -match 'errwatch-launch\.ps1') -or ($txt -match '启动报错看护\.vbs')
+        if (-not $hasLaunch) { $p += "$n 没有走 launch（不会带起哨兵和托盘）" }
+        # 直接拉起界面 = 老路（bat 里出现裸的 errwatch-ui.ps1）
+        if ($txt -match '-File\s+"[^"]*errwatch-ui\.ps1"') {
+            $p += "$n 直接启动了 errwatch-ui.ps1 —— 这条老路不会带起托盘"
+        }
+    }
+    return $p
+}
+
 Write-Host ''
 if ($fail -eq 0) {
     Write-Host ("一键引导：{0}/{0} 全部通过" -f $pass) -ForegroundColor Green

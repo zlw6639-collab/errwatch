@@ -35,6 +35,9 @@ $script:EwStateFileNames = @(
     'sentinel-retention.jsonl', 'sentinel-dumplink.jsonl',
     # 托盘
     'tray-acks.jsonl', 'tray-error.log', 'tray-fallback.jsonl', 'tray-exit.json', 'tray-exit.jsonl',
+    # ★ 2026-10-26：托盘自愈记录（explorer 重启后重挂图标 / 启动时就位提示）。
+    #   它含本机 PID 与时间戳，属运行时记录 —— 显式写进名单，不靠".log 恰好没进白名单"。
+    'tray-events.log',
     # ★ 2026-10-25（审计方向 02 新增的产物）：诊断追溯记录。每次采集都会写，
     #   内容含本机事件主题与规则指纹 —— 和 tray-fallback 同一类，绝不能进包。
     'diagnosis-traces.jsonl',
