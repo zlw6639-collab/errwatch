@@ -350,6 +350,35 @@ Case 'M 所有双击入口都走 launch（不许某个入口只启界面）' {
     return $p
 }
 
+# ── 双击 = "让托盘出现"，不是"确认它理论上活着"（2026-10-26 第四个根因）──
+# 用户原话：「我双击的是桌面 lnk 现在还是没有」。
+# 实测：托盘进程从 17:39 就在跑、launch.log 每次双击都写 before=1/after=1 ——
+#   也就是说"引导成功"了，可用户屏幕上就是没有图标（进程在跑 ≠ 图标在）。
+# 修法不是再检查一次进程，而是让双击**真的产生效果**：
+#   launch 在托盘已在跑时写 tray-remount.flag，正在跑的托盘每秒消费它并重挂图标。
+Case 'N 托盘已在跑时，双击要真的让它重挂图标（remount flag）' {
+    $p = @()
+    $lsrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-launch.ps1') -Raw -Encoding UTF8
+    if ($lsrc -notmatch 'tray-remount\.flag') { $p += 'launch 没有写 tray-remount.flag —— 托盘在跑时双击等于什么都没发生' }
+    # 必须写在 already-running 分支里（写在新启动分支没意义：新托盘本来就会挂图标）
+    $idx = $lsrc.IndexOf("`$st.trayStart = 'already-running'")
+    if ($idx -lt 0) { $p += '找不到 already-running 分支' }
+    else {
+        $blk = $lsrc.Substring($idx, [Math]::Min(900, $lsrc.Length - $idx))
+        if ($blk -notmatch 'tray-remount\.flag') { $p += 'remount 请求没有写在 already-running 分支里' }
+    }
+    $tsrc = Get-Content -LiteralPath (Join-Path $root 'errwatch-tray.ps1') -Raw -Encoding UTF8
+    if ($tsrc -notmatch 'tray-remount\.flag') { $p += '托盘没有消费 remount 请求' }
+    if ($tsrc -notmatch "event = 'remount-on-request'") { $p += '重挂没有留痕（tray-events.log），出问题无法证明它执行过' }
+    # 重挂必须是先关再开（只设 true 对已被 shell 丢掉的图标无效）
+    $tidx = $tsrc.IndexOf('tray-remount.flag')
+    if ($tidx -ge 0) {
+        $tblk = $tsrc.Substring([Math]::Max(0, $tidx - 300), [Math]::Min(1200, $tsrc.Length - [Math]::Max(0, $tidx - 300)))
+        if ($tblk -notmatch 'Visible = \$false') { $p += '重挂没有先 Visible=$false（shell 不会重新接纳）' }
+    }
+    return $p
+}
+
 Write-Host ''
 if ($fail -eq 0) {
     Write-Host ("一键引导：{0}/{0} 全部通过" -f $pass) -ForegroundColor Green

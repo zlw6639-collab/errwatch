@@ -139,6 +139,15 @@ if ($st.trayBefore -eq 0) {
     }
 } else {
     $st.trayStart = 'already-running'
+    # ★ 2026-10-26（用户：「我双击的是桌面 lnk 现在还是没有」）：
+    #   托盘进程在跑 ≠ 用户看得见图标。explorer 重启会把图标丢掉、进程却毫发无损；
+    #   此时 launch 只检查"进程在不在"，双击之后**什么都不发生**，用户看到的仍是"没有托盘"。
+    #   所以这里留一个请求文件：让**正在跑的那个托盘**重新挂一次图标（它每秒看这个文件）。
+    #   这样"双击"才真的等于"让托盘出现"，而不是"确认它理论上活着"。
+    try {
+        $remountFlag = Join-Path $root 'tray-remount.flag'
+        (Get-Date).ToString('o') | Set-Content -LiteralPath $remountFlag -Encoding UTF8 -Force
+    } catch { }
 }
 
 # 给它们一点时间真正起来（哨兵首轮扫描 ~1-2 秒；托盘建图标 <1 秒）

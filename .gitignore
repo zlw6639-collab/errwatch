@@ -34,6 +34,8 @@ tray-error.log
 # 托盘自愈记录：explorer 重启后重挂图标 / 由 launch 拉起时的"已就位"提示。
 # 含本机 PID 与时间戳 → 与 tray-fallback 同一类，绝不进公开仓库（也不进包）。
 tray-events.log
+# launch 写的「请把图标重挂一次」请求（托盘每秒消费一次，瞬态）
+tray-remount.flag
 tray-exit.json
 tray-exit.jsonl
 tray-fallback.jsonl

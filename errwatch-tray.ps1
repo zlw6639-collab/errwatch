@@ -1066,6 +1066,25 @@ $suppressedIds = @{}
 try {
     while ((Get-Date) -lt $deadline) {
         try {
+            # ★ 2026-10-26（用户：「我双击的是桌面 lnk 现在还是没有」）：
+            #   双击 = 用户的明确请求"让我看见托盘"。而 launch 只能检查进程在不在 ——
+            #   进程在跑但图标被 explorer 丢掉时，双击就什么都不会发生。
+            #   所以 launch 会留一个 remount 请求文件；这里每秒看一次，有就重挂：
+            #   先 Visible=$false 再 $true（只设 true 对已经被 shell 丢掉的图标无效）。
+            try {
+                $remountFlag = Join-Path $Root 'tray-remount.flag'
+                if (Test-Path -LiteralPath $remountFlag) {
+                    Remove-Item -LiteralPath $remountFlag -Force -ErrorAction SilentlyContinue
+                    $ni.Visible = $false
+                    Start-Sleep -Milliseconds 150
+                    $ni.Visible = $true
+                    try {
+                        $line = [ordered]@{ at = (Get-Date).ToString('o'); pid = $PID; event = 'remount-on-request' } | ConvertTo-Json -Compress
+                        Add-Content -LiteralPath (Join-Path $Root 'tray-events.log') -Value $line -Encoding UTF8
+                    } catch { }
+                }
+            } catch { }
+
             $pending = @(Read-Pending)
             $acks = Read-Acks
             $fs = Test-Fullscreen
