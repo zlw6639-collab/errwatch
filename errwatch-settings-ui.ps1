@@ -381,7 +381,7 @@ $pageRecovery.Controls.Add($cmbApp)
 
 $btnRescue = New-Action '⚑ 开始应急救援' 286 444 170
 $pageRecovery.Controls.Add($btnRescue)
-$pageRecovery.Controls.Add((New-Hint '这里是手动救援：你主动选一个程序去找它的恢复文件。哨兵发现故障时会用事件自己的程序，不受这里影响。救援只读，不改也不覆盖任何文件。' 22 478 520))
+$pageRecovery.Controls.Add((New-Hint '你主动选一个程序去找它的恢复文件；只读，不改也不覆盖任何文件。' 22 470 520))
 
 $btnRescue.Add_Click({
     try {
@@ -447,7 +447,7 @@ $lblWatchCount.Location = New-Object System.Drawing.Point(22, 344)
 $lblWatchCount.Size = New-Object System.Drawing.Size(530, 40)
 $pageWatch.Controls.Add($lblWatchCount)
 
-$pageWatch.Controls.Add((New-Hint '除了这个列表，以下两类也会被自动看护：① 当前有窗口的程序；② 崩过一次的程序（从历史里学）。内置名单随包分发，改 core\sentinel.json 才有意义。' 22 392 540))
+$pageWatch.Controls.Add((New-Hint '此外还有两类会被自动看护：有窗口的程序、崩过一次的程序' 22 140 540))
 
 function Get-BuiltinWatchNames {
     $p = Join-Path $root 'core\sentinel.json'
@@ -648,7 +648,7 @@ $pageNotify.Controls.Add($wlLbl.dot)
 $txtNotifyWl = New-Input 22 268 460
 $txtNotifyWl.Text = (@($s.notify.whitelist) -join ', ')
 $pageNotify.Controls.Add($txtNotifyWl)
-$pageNotify.Controls.Add((New-Hint '例：gcad, winword, excel。可以带 .exe，也可以粘完整路径，保存时会自动规范化。' 22 296 540))
+$pageNotify.Controls.Add((New-Hint '例：gcad, winword, excel（可带 .exe 或粘完整路径）' 22 296 540))
 
 $lblNotifyWlState = New-Object System.Windows.Forms.Label
 $lblNotifyWlState.Font = $fontSmall
@@ -669,7 +669,7 @@ $pageNotify.Controls.Add($secLbl.dot)
 $txtNotifySec = New-Input 22 374 80
 $txtNotifySec.Text = [string]$s.notify.seconds
 $pageNotify.Controls.Add($txtNotifySec)
-$pageNotify.Controls.Add((New-Hint '3–30 秒。太短看不完，太长挡住右下角。全屏时本来就不弹。' 118 378 440))
+$pageNotify.Controls.Add((New-Hint '3–30 秒（悬停左侧 ? 看细节）' 118 378 440))
 
 # ── 超时提醒（2026-10-26 第二版，用户：「过期弹窗也可以改动设置，多久过期，要不要弹窗」）──
 $pageNotify.Controls.Add((New-FieldLabel '超时未处理提醒' 22 414))
@@ -700,7 +700,7 @@ try {
 } catch { }
 $txtOverdueMin.Text = [string]$ovMinInit
 $pageNotify.Controls.Add($txtOverdueMin)
-$pageNotify.Controls.Add((New-Hint '5–1440 分钟。与「时限与兜底」页是同一个值，改哪边都一样。' 340 476 280))
+$pageNotify.Controls.Add((New-Hint '5–1440 分钟（与时限页同值）' 340 476 280))
 
 $lblOverdueState = New-Object System.Windows.Forms.Label
 $lblOverdueState.Font = $fontSmall
@@ -1004,24 +1004,38 @@ $helpText = @'
   · 「已恢复」只说明程序重新跑起来了，不说明崩溃原因查清了
 '@
 
-$rtbHelp = New-Object System.Windows.Forms.RichTextBox
-$rtbHelp.Location = New-Object System.Drawing.Point(22, 38)
-$rtbHelp.Size = New-Object System.Drawing.Size(560, 470)
-$rtbHelp.Anchor = 'Top,Bottom,Left,Right'
-$rtbHelp.ReadOnly = $true
-$rtbHelp.BorderStyle = 'None'
-$rtbHelp.BackColor = $cBg
-$rtbHelp.ForeColor = $cText
-$rtbHelp.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
-$rtbHelp.WordWrap = $true
 # ★ 2026-10-26（用户截图实证：「帮助没有下拉 不能看到下面的东西」）：
-#   RichTextBox 在 WordWrap=true 时默认**只给水平条、不给垂直条**，而这一页正文
-#   远高于控件高度 → 后面的内容被切掉，用户既看不到也滚不到。
-#   显式要垂直滚动条（ForcedVertical：即使内容刚好不超也留着条，免得用户
-#   误以为"就这点内容"）。
-$rtbHelp.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::ForcedVertical
-$rtbHelp.Text = $helpText
-$pageHelp.Controls.Add($rtbHelp)
+#   试过两版都不行，最后定在第 ③ 版：
+#     ① RichTextBox.ScrollBars = ForcedVertical —— 深色主题下滚动条极不显眼，用户还是看不到下面
+#     ② Panel.AutoScroll + RichTextBox 按内容撑高 —— 实测 RTB 已撑到 871 而 Panel 只有 470，
+#        界面上**依然没有滚动条**（RichTextBox 在 AutoScroll 容器里的滚动计算不可靠，
+#        即使 AutoScrollMinSize + PerformLayout 也没用）
+#     ③ 现在：**Label + Panel.AutoScroll**。Label 的 AutoSize + MaximumSize 是 WinForms 里
+#        最可靠的"自动换行 + 撑高"组合，Panel 能正确算出滚动范围。
+#        代价：文字不能拖选复制（RTB 才能）。用户的核心诉求是"能看到下面"，
+#        拿不到滚动的"可选中"没有意义，所以这里选可靠性。
+$helpHost = New-Object System.Windows.Forms.Panel
+$helpHost.Location = New-Object System.Drawing.Point(22, 38)
+$helpHost.Size = New-Object System.Drawing.Size(574, 470)
+$helpHost.Anchor = 'Top,Bottom,Left,Right'
+$helpHost.BackColor = $cBg
+$helpHost.AutoScroll = $true
+$pageHelp.Controls.Add($helpHost)
+
+$lblHelp = New-Object System.Windows.Forms.Label
+$lblHelp.Location = New-Object System.Drawing.Point(0, 0)
+$lblHelp.AutoSize = $true
+# MaximumSize 的宽度固定、高度 0 = 只按宽度换行，高度随内容长
+$lblHelp.MaximumSize = New-Object System.Drawing.Size(548, 0)
+$lblHelp.BackColor = $cBg
+$lblHelp.ForeColor = $cText
+$lblHelp.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+# ★ 2026-10-26（用户：「或者直接要用的时候再渲染 平时用户点不到的时间不用渲染？」）：
+#   **不填文本**，改由 Show-Page 在首次切到「帮助」页时才渲染（$script:HelpRendered）。
+#   实测单次成本只有 0.31 ms（600 字）—— 省下的时间可以忽略，但原则是对的：
+#   用不到的就不该放在启动路径上。将来这段说明变长/页数变多时，这条就不只是原则了。
+$script:HelpRendered = $false
+$helpHost.Controls.Add($lblHelp)
 
 # ── 面板 3：关于 ──────────────────────────────────────────────────────────
 $pageAbout = New-Object System.Windows.Forms.Panel
@@ -1232,6 +1246,18 @@ function Show-Page([string]$key) {
     $pageTools.Visible = ($key -eq 'tools')
     $pageHelp.Visible = ($key -eq 'help')
     $pageAbout.Visible = ($key -eq 'about')
+    # 帮助页正文：首次切到这一页才渲染（懒渲染，见上面 $script:HelpRendered 的说明）
+    if ($key -eq 'help' -and -not $script:HelpRendered) {
+        $script:HelpRendered = $true
+        try {
+            $lblHelp.Text = $helpText
+            # Label 的 AutoSize+MaximumSize 会自己撑高（换行也由它处理）；
+            # 这里只把 Panel 的滚动范围对齐到它的实际高度 —— 不同步的话
+            # Panel 算不出该滚多少，滚动条就不出现。
+            $helpHost.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($lblHelp.Height + 8))
+            $helpHost.PerformLayout()
+        } catch { }
+    }
     foreach ($k in $navButtons.Keys) {
         $navButtons[$k].BackColor = if ($k -eq $key) { $cSel } else { $cSide }
         $navButtons[$k].ForeColor = if ($k -eq $key) { $cText } else { $cMuted }
