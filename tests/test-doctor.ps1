@@ -138,14 +138,23 @@ Case 'H 有哨兵时 notify 报「由哨兵代跑」而不是缺失' {
 
 Write-Host '--- 托盘进程状态（A68 的消费端）---'
 
-Case 'I 托盘进程：doctor 要报「在跑/没在跑」，并从退出标记解释' {
+Case 'I 托盘进程：doctor 必须报出状态（在跑/没在跑），没跑要能解释' {
     $p = @()
     $src = Get-Content -LiteralPath $doctor -Raw -Encoding UTF8
     if ($src -notmatch '托盘进程') { $p += 'doctor 没有托盘进程检查（托盘死了没人知道）' }
     if ($src -notmatch 'tray-exit\.jsonl') { $p += 'doctor 没读退出标记（分不清是你关的还是崩的）' }
-    # 正面：本机托盘在跑时必须报 OK
-    if ($outText -match '\[OK\]\s+errwatch-sentinel') {
-        if ($outText -notmatch '托盘进程：在跑') { $p += 'doctor 没说托盘在跑（运行输出里没有该行）' }
+    # ★ 2026-10-26（收尾整理时抓到的**测试脆弱点**，不是代码问题）：
+    #   原断言是「本机托盘在跑时必须报 OK」，等于把测试绑在了**本机运行状态**上：
+    #   实测这条会误红 —— 本机的实例跑在 `D:\Tools\errwatch`（正式安装位置），
+    #   而 doctor 按**安装目录**锚定检测（这是对的，别的地儿的托盘不算自己），
+    #   于是开发目录这份永远报「没在跑」，门禁就红了。换台机器、或换个目录跑测试同样误红。
+    #   正确的断言是 A68 的本意：**不许不吭声** —— 要么说在跑，要么说没在跑，
+    #   并且没跑时要给解释（退出标记）或修复建议。这才真正守着"托盘死了没人知道"。
+    if ($outText -notmatch '托盘进程：在跑' -and $outText -notmatch '托盘进程：没在跑') {
+        $p += 'doctor 既没说在跑也没说没在跑（用户无从判断气泡到底会不会出现）'
+    }
+    if ($outText -match '托盘进程：没在跑') {
+        if ($outText -notmatch '上次退出|修：|修复') { $p += '报「没在跑」却没给原因或修复办法（等于只说了一半）' }
     }
     return $p
 }
