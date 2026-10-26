@@ -87,6 +87,9 @@ desktop.ini
 HANDOFF.md
 ISSUES.md
 NEXT-SESSION.md
+# 2026-10-26：复盘/归档类（`归档-*.md`）。同样含本机路径、PID、进程名快照，
+# 属过程记录而不是使用文档 —— 留在磁盘上当参考，不进公开仓库。
+归档-*.md
 tests/audit-*.md
 tests/design-*.md
 tests/discussion-*.md
