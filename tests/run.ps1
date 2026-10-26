@@ -144,7 +144,21 @@ $ps5SyntaxOk = $synOut -match '^OK'
 Write-Host ("  5.1 语法解析（{0} 个 .ps1）: {1}" -f $psFiles.Count, $(if ($ps5SyntaxOk) { 'PASS' } else { "FAIL → $synOut" })) `
     -ForegroundColor $(if ($ps5SyntaxOk) { 'Green' } else { 'Red' })
 
-$smokeOk = $mainEntryOk -and $ps5SyntaxOk
+# ── BOM 门禁（2026-10-26）：上面那条语法解析用的是 **5.1 自己的 Parser**，
+#   而它能正确读「无 BOM 的 UTF-8」—— 所以「语法 PASS」证明不了「5.1 下能跑」。
+#   实测教训：一次文本编辑把 errwatch-ui.ps1 的 BOM 弄丢，语法解析照样 PASS，
+#   但 5.1 实跑 UI 自检时按 GBK 解码中文 → EXIT=1、界面初始化失败（C2 红）。
+#   这里直接查字节，与 errwatch-doctor 和 tools\pack.ps1 用同一判据。
+$noBom = @()
+foreach ($f in $psFiles) {
+    $b = [System.IO.File]::ReadAllBytes($f)
+    if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) { $noBom += (Split-Path $f -Leaf) }
+}
+$bomOk = ($noBom.Count -eq 0)
+Write-Host ("  UTF-8 BOM（{0} 个 .ps1）: {1}" -f $psFiles.Count, $(if ($bomOk) { 'PASS' } else { "FAIL → 缺 BOM：$($noBom -join '、')（修法：pwsh -File tools\ensure-bom.ps1）" })) `
+    -ForegroundColor $(if ($bomOk) { 'Green' } else { 'Red' })
+
+$smokeOk = $mainEntryOk -and $ps5SyntaxOk -and $bomOk
 
 # ── 程序身份（2026-10-23）：未收录的程序也要说得清「它是什么」──────────────
 # 用户实测反馈：记事本崩溃时只显示「本工具没收录 Notepad.exe」。

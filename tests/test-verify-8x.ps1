@@ -126,7 +126,12 @@ Case '8.3b 真的跑一遍那条检查命令：能跑通、不报语法错' {
     # 用真实存在的程序名，避免"看起来跑了其实什么都没查"
     $check = Join-Path $root 'errwatch-check.ps1'
     if (-not (Test-Path -LiteralPath $check)) { return @('缺 errwatch-check.ps1') }
-    $out = & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $check -App 'notepad' -Code '0xc0000005' 2>&1 | Out-String
+    # ★ 2026-10-26 P2（外部审计在干净 clone 上两次复现）：原来这里没传 -NoPause ——
+    #   errwatch-check.ps1 末尾有 `if (-not $NoPause) { Read-Host '按回车关闭' }`，
+    #   于是**无控制台环境（CI / GitHub Actions / 重定向）会卡在等输入**，
+    #   表现为「卡住」而不是报错，极难排查；作者本地有控制台、按个回车的差异把 bug 藏住了。
+    #   任何实跑都要带免交互开关。8.3c 把这条钉成回归。
+    $out = & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $check -App 'notepad' -Code '0xc0000005' -NoPause 2>&1 | Out-String
     $code = $LASTEXITCODE
     $p = @()
     if ($code -ne 0) { $p += "检查脚本退出码 $code（应 0）`n$out" }
@@ -134,6 +139,45 @@ Case '8.3b 真的跑一遍那条检查命令：能跑通、不报语法错' {
         $p += "输出里有语法/命令错误`n$out"
     }
     if ($out -notmatch '程序|错误码') { $p += "输出里没有「程序/错误码」的回显（可能没真跑）`n$out" }
+    return $p
+}
+
+Case '8.3c 实跑含 Read-Host 的脚本必须传免交互开关（防无人值守挂死）' {
+    # ★ 2026-10-26 P2 的钉子：8.3b 漏传 -NoPause，在干净 clone / CI 上卡死等输入。
+    #   这条不看某个具体文件，而是把「tests 里所有实跑调用」整体扫一遍：
+    #   凡被跑的脚本带 Read-Host、且该脚本用 $NoPause 守卫 → 调用行必须带 -NoPause。
+    #   扫不到任何调用也判红（说明正则或结构变了，守卫已名存实亡）。
+    $p = @()
+    $scanned = 0
+    $testFiles = @(Get-ChildItem -LiteralPath (Join-Path $root 'tests') -Filter '*.ps1' -File -ErrorAction SilentlyContinue)
+    foreach ($tf in $testFiles) {
+        $text = Get-Content -LiteralPath $tf.FullName -Encoding UTF8 -Raw
+        if (-not $text) { continue }
+        foreach ($ln in ($text -split "`r?`n")) {
+            if ($ln -notmatch '&\s*\$(pwshExe|psExe)') { continue }
+            if ($ln -notmatch '\s-File\s') { continue }
+            $scanned++
+            $name = $null
+            if ($ln -match "-File\s+\(\s*Join-Path[^)]*?'([^']+\.ps1)'") { $name = $Matches[1] }
+            elseif ($ln -match '-File\s+"([^"]+\.ps1)"') { $name = $Matches[1] }
+            elseif ($ln -match "-File\s+'([^']+\.ps1)'") { $name = $Matches[1] }
+            elseif ($ln -match '-File\s+\$(\w+)') {
+                $v = $Matches[1]
+                if ($text -match ('\$' + $v + '\s*=\s*Join-Path[^\r\n]*?''([^'']+\.ps1)''')) { $name = $Matches[1] }
+            }
+            if (-not $name) { continue }
+            $target = Join-Path $root $name
+            if (-not (Test-Path -LiteralPath $target)) { continue }
+            $src = Get-Content -LiteralPath $target -Encoding UTF8 -Raw
+            if ($src -notmatch 'Read-Host') { continue }
+            # 只断言靠 $NoPause 守卫的脚本；其它脚本（-Json / -Yes / -NonInteractive）形状不同，不在此规则内
+            if ($src -notmatch '\$NoPause') { continue }
+            if ($ln -notmatch '-NoPause') {
+                $p += "$($tf.Name)：实跑 $name 没传 -NoPause（该脚本含 Read-Host，无人值守会卡在等输入）`n    $($ln.Trim())"
+            }
+        }
+    }
+    if ($scanned -eq 0) { $p += '一条实跑调用都没扫到（正则或结构变了，这条守卫已名存实亡）' }
     return $p
 }
 

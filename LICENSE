@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-许可范围说明（重要，不是标准 MIT 文本的一部分）：
-
-- 本 LICENSE 覆盖：全部 `.ps1` / `.cmd` / `.bat` 脚本、`core\analyze.ps1` 等代码、
-  `tools\` 下的转换器等程序代码。
-- **不覆盖** `core\rules-sigma.json`（由 Sigma 规则转换而来，受 **DRL 1.1** 约束）
-  以及从第三方引入的任何规则/数据。详见 `THIRD-PARTY-NOTICES.md`。
-- 文档（`README.md`、`定位.md`、`免责声明.md`、`runners\*.md`、`tests\*.md`）
-  随本项目以 MIT 同条件提供（如需单独采用 CC-BY-4.0，请在发布前明确标注）。
-- 版权主体：**猫咖没有猫猫 (@zlw6639-collab)**，权属确认记录见 `发布流程.md` §0。
-- 本 LICENSE **不授予**任何第三方内容的权利；引用第三方材料时以各自许可证为准。

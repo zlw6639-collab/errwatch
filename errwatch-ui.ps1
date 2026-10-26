@@ -1664,7 +1664,10 @@ function Show-FixDialog([object]$row) {
                     'rem ============================================================',
                     ''
                 )
-                $head += ('"' + $psExe2 + '" -NoProfile -ExecutionPolicy Bypass -File "' + $checkPath + '" -App "' + ([string]$row.程序) + '" -Code "' + ([string]$row.错误码) + '"')
+                # ★ 2026-10-26 P2 同源：errwatch-check.ps1 末尾有 Read-Host（靠 $NoPause 拦），
+                #   而 .cmd 自己在末尾已有 `pause` 兜底 —— 不传 -NoPause 的话双击要按两次回车，
+                #   在无人值守（计划任务 / 重定向）下就是挂死。这里必须带 -NoPause。
+                $head += ('"' + $psExe2 + '" -NoProfile -ExecutionPolicy Bypass -File "' + $checkPath + '" -App "' + ([string]$row.程序) + '" -Code "' + ([string]$row.错误码) + '" -NoPause')
                 # ★ 2026-10-23 用户反馈「生成的脚本只能查不能修」：加一段修复入口（会先问 y/N）
                 $repairPath = Join-Path $Root 'errwatch-repair.ps1'
                 $head += ''

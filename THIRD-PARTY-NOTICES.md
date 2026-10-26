@@ -1,4 +1,4 @@
-﻿# 第三方声明（THIRD-PARTY-NOTICES）
+# 第三方声明（THIRD-PARTY-NOTICES）
 
 > 本文件说明 errwatch 使用或**曾参考**的第三方材料、其许可证，以及本项目的合规处理。
 > 与 `LICENSE` 配合阅读：代码是 MIT，**第三方规则/数据不是**。
@@ -99,6 +99,16 @@ SigmaHQ 的 Sigma 格式仅作为**规则格式参考**；Hayabusa 仅作为**�
 | `core\events.json`（事件 ID 人话表） | MIT（随代码） |
 | `core\apps.json`、`core\noise.json`、`core\schema\*.md` | MIT（随代码） |
 | 文档（README / 定位 / 免责声明 / 操作卡 / 审计记录） | MIT（随项目；如需 CC-BY-4.0 请发布前明确） |
+
+### 许可范围（覆盖与不覆盖）
+
+> 2026-10-26 从 `LICENSE` 迁入：原来这段中文写在标准 MIT 正文后面，GitHub 的 license 识别容差不够 → API 返回 `NOASSERTION`，About 栏不显示 MIT 徽章，依赖扫描器报 unknown license。**`LICENSE` 现在只保留逐字的标准 MIT 文本**，适用范围说明放在这里。
+
+- 本项目的 MIT 覆盖：全部 `.ps1` / `.cmd` / `.bat` 脚本、`core\analyze.ps1` 等代码、`tools\` 下的转换器等程序代码。
+- **不覆盖** `core\rules-sigma.json`（由 Sigma 规则转换而来，受 **DRL 1.1** 约束）以及从第三方引入的任何规则 / 数据，详见本文件第一至三节。
+- 文档（`README.md`、`定位.md`、`免责声明.md`、`runners\*.md`、`tests\*.md`）随本项目以 MIT 同条件提供（如需单独采用 CC-BY-4.0，请在发布前明确标注）。
+- 版权主体：**猫咖没有猫猫 (@zlw6639-collab)**，权属确认记录见 `发布流程.md` §0。
+- 本项目 LICENSE **不授予**任何第三方内容的权利；引用第三方材料时以各自许可证为准。
 
 ## 八、发布时需附带
 
