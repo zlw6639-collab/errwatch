@@ -2105,6 +2105,21 @@ function Render-DetailForRow {
     #   没有消息泵时设 CurrentCell **不会**触发事件，详情框里留着上一行的内容，
     #   于是「详情(日志行)/(哨兵行)/(第1行)」三条自检其实一直在验错的行（真 bug）。
     if (-not $r) { return }
+    # ★ 2026-10-29（用户：「为什么详细是所有的 不能只出现选择的那一条吗」）：
+    #   真因：DetailAsync 改回同步直写之后，**控件再没人清空** ——
+    #   2121/2237 清的是缓冲（$DetailBuf），而 Start-DetailPlayback 在同步模式下
+    #   刻意不碰控件（第一版在那里 Clear 把刚写好的内容清掉过）。
+    #   结果是每切一行就 Append 到旧内容后面，详情区越滚越长，看起来像「把所有条目都显示了」。
+    #   修法：渲染**一开始**就清（位置在开头，所以不会误删本行内容）。
+    try {
+        if ($script:DetailTimer) {
+            try { $script:DetailTimer.Stop(); $script:DetailTimer.Dispose() } catch { }
+            $script:DetailTimer = $null
+        }
+        $script:DetailPos = 0
+        $script:DetailBuf.Clear()
+        $rtbDetail.Clear()
+    } catch { }
     # ★ 2026-10-26（用户：「是打开没有内容啊喂」）：
     #   根因找到了 —— **收起状态下详情框是隐藏的**，而 RichTextBox 在隐藏时
     #   Select/AppendText 会失败（异常被 catch 吞掉），内容根本没写进去；
@@ -2586,6 +2601,27 @@ if ($Check) {
         }
         try { Render-DetailForRow $script:Rows[0] } catch { }
         Write-Host "详情(第1行): $(($rtbDetail.Text -replace "`r?`n", ' ｜ '))"
+        # ★ 2026-10-29（用户：「为什么详细是所有的 不能只出现选择的那一条吗」）：
+        #   直接断言「详情只属于当前这一行」—— 连续渲染两行后，控件里不许残留上一行的标题。
+        #   原来没有任何断言守这件事，所以同步化之后控件永不清空的退化一路没人发现。
+        try {
+            $rA = $script:Rows[0]
+            Render-DetailForRow $rA
+            # needle 用「时间 + 程序名」，比只用时间稳：现场常有多条同一分钟的记录
+            $needle = "[$([string]$rA.时间)]  $([string]$rA.程序)"
+            # 取一条**程序名不同**的行做 B（同程序同时间的行无法区分，跳过）
+            $rB = $null
+            for ($rj = 1; $rj -lt $script:Rows.Count; $rj++) {
+                if ([string]$script:Rows[$rj].程序 -ne [string]$rA.程序) { $rB = $script:Rows[$rj]; break }
+            }
+            if ($rB) {
+                Render-DetailForRow $rB
+                $leftover = ([string]$rtbDetail.Text).Contains($needle)
+                Write-Host "详情互斥: 渲染「$([string]$rB.程序)」后残留上一行标题=$leftover（应为 False）"
+            } else {
+                Write-Host '详情互斥: （现场没有第二个不同程序的行，无法验证互斥 —— 不算失败）'
+            }
+        } catch { Write-Host "详情互斥: 检查失败 $($_.Exception.Message)" }
         # ★ 2026-10-24：上面按「来源」取第一条，恰好选中不带 .dmp 的事件时，
         #   「这次的内存快照」和「从快照里读出来的」两段就永远没人验过 —— 坏了也不会红。
         #   这里专门找一条真带快照的事件，单独渲染一次。
