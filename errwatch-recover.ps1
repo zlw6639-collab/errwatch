@@ -131,7 +131,12 @@ function Finish([string]$status, [string]$msg = '') {
                 if ($r.situation) { Write-Host "现在：$($r.situation)" }
                 Write-Host '下一步：程序若还开着，回程序里「另存为」一次；关着就先别反复重启。' -ForegroundColor Green
             } else {
-                Write-Host "结果：找到 $($bc.Count) 个候选（越靠前越可能是你刚丢的那份）" -ForegroundColor Green
+                $isGeneric = [bool]$r.genericRescue
+                if ($isGeneric) {
+                    Write-Host "结果：这个程序不在已知名单里 —— 下面是**最近 30 分钟内动过的**通用位置文件，不是它的官方恢复目录" -ForegroundColor Yellow
+                } else {
+                    Write-Host "结果：找到 $($bc.Count) 个候选（越靠前越可能是你刚丢的那份）" -ForegroundColor Green
+                }
                 $show = [Math]::Min(3, $bc.Count)
                 for ($bi = 0; $bi -lt $show; $bi++) {
                     $b = $bc[$bi]
@@ -140,10 +145,31 @@ function Finish([string]$status, [string]$msg = '') {
                     try { $bsz = "$([math]::Round([double]$b.Length / 1KB, 1)) KB" } catch { }
                     $btm = ''
                     try { $btm = [string]$b.LastWriteTime } catch { }
-                    Write-Host ("  [$($bi + 1)] $bn   $bsz   $btm")
+                    # ★ 2026-10-29（优化①）：带上头部指纹 ——「命中 ≠ 内容有效」现在能一眼筛，
+                    #   不用把每个候选都拿到 Word 里试一遍。
+                    $tip = ''
+                    if ($b.PSObject.Properties['Fingerprint']) {
+                        $tip = switch ([string]$b.Fingerprint) {
+                            'ole'        { '像 Word/Excel 文档容器' }
+                            'zip'        { '像 ZIP / Office 新格式文档' }
+                            'psd'        { '像 Photoshop 文档' }
+                            'png'        { '像 PNG 图片' }
+                            'jpeg'       { '像 JPEG 图片' }
+                            'gif'        { '像 GIF 图片' }
+                            'text'       { '像文本 / JSON（通常不是 Word 文档）' }
+                            'unreadable' { '读不到开头（被占用 / 无权限）' }
+                            default      { '格式看不出来（不等于没内容）' }
+                        }
+                    }
+                    $line = "  [$($bi + 1)] $bn   $bsz   $btm"
+                    if ($tip) { $line += "   ← $tip" }
+                    Write-Host $line
                 }
                 if ($bc.Count -gt $show) { Write-Host "  …还有 $($bc.Count - $show) 个（命令行跑同一脚本可看完整列表）" -ForegroundColor DarkGray }
-                $step = if ($r.convert.Count -gt 0) { [string]$r.convert[0] } else { '复制一份 → 改扩展名 → 用程序打开核对（原文件别动）' }
+                $step = ''
+                if ($r.convert.Count -gt 0) { $step = [string]$r.convert[0] }
+                elseif ($isGeneric) { $step = '先挑「像是真文档」的那个，复制一份出来，再用原程序打开核对（原文件别动）' }
+                else { $step = '复制一份 → 改扩展名 → 用程序打开核对（原文件别动）' }
                 Write-Host "下一步：$step" -ForegroundColor Green
             }
             if ([int]$r.deniedDirs -gt 0) { Write-Host "⚠ 有 $($r.deniedDirs) 个位置没读权限，那里可能有文件没算进来" -ForegroundColor Yellow }
@@ -405,7 +431,9 @@ if ($oppRec) {
 # ── 探针（只读：不移动、不改名、不覆盖；白名单与策略匹配都在 core 里）────
 $probe = $null
 try {
-    $probe = Invoke-ErrwatchRecoveryProbe -Root $root -App $App -Now $now -StrategyFile $StrategyFile -IncludeItems -MaxPerSpec 200
+    # ★ 2026-10-29：只有**用户主动救援**才允许走通用兜底（探 %TEMP%/LocalLow 很重）；
+    #   哨兵与 doctor 的周期探针不传这个开关 —— 否则首轮会被拖到写不出 status（实测门禁红过）。
+    $probe = Invoke-ErrwatchRecoveryProbe -Root $root -App $App -Now $now -StrategyFile $StrategyFile -IncludeItems -MaxPerSpec 200 -AllowGeneric
 } catch {
     Finish 'ERROR' "恢复机会探针失败：$($_.Exception.Message)"
 }
@@ -420,6 +448,10 @@ $r.guidance = @($probe.steps)
 $r.verify   = @($probe.verify)
 $r.mechanisms = @($probe.mechanisms)
 $r.convert    = @($probe.convert)
+# ★ 2026-10-29（优化②）：这次扫描用的是「通用兜底位置」还是它的官方恢复目录 ——
+#   展示层必须分开说，否则用户会以为 %TEMP% 里那堆东西是 Word 的恢复文件。
+#   判据与探针同源：known=false 就是没匹配到任何 match。
+$r.genericRescue = -not [bool]$probe.known
 
 # ── 汇总候选（保留「路径不存在 / 白名单外」的原始说明）───────────────────
 $candidates = @()

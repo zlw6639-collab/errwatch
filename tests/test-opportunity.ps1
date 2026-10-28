@@ -239,6 +239,49 @@ Case 'M doctor 有「恢复机会」段并给出合计' {
     return $p
 }
 
+Case 'Z1 未收录的程序：主动救援时给兜底位置，周期探针里必须没有（不许拖慢哨兵）' {
+    # ★ 2026-10-29（优化②）：原来未收录程序只有一句「没找到恢复文件」—— 实测 VRChat 这种
+    #   程序确实有东西，但策略表只覆盖 8 类软件，用户看到的结论比现实悲观。
+    #   ★ 同批性能回归：兜底会扫 %TEMP%/LocalLow（本机 4 万文件），放进哨兵周期探针会把
+    #   首轮拖到写不出 status（门禁实测红过），所以必须受 -AllowGeneric 控制。
+    $p = @()
+    $strat = Get-ErrwatchRecoveryStrategy -Root $root -App 'no-such-app-xyz.exe' -AllowGeneric
+    if ($strat.known) { $p += '未收录程序却判成 known' }
+    if (@($strat.paths).Count -eq 0) { $p += '主动救援时未收录程序没有任何兜底位置（结论会退化成「没救」）' }
+    $generic = @($strat.paths | Where-Object { $_.PSObject.Properties['generic'] -and $_.generic })
+    if ($generic.Count -eq 0) { $p += '兜底位置没有标 generic（会被当成它的官方恢复目录）' }
+    $withAge = @($strat.paths | Where-Object { $_.PSObject.Properties['maxAgeMinutes'] -and $_.maxAgeMinutes })
+    if ($withAge.Count -eq 0) { $p += '兜底位置没有 maxAgeMinutes（%TEMP% 几万个历史文件会全冲出来）' }
+    # 周期探针（不传开关）必须是轻的：一条兜底都不许有
+    $lean = Get-ErrwatchRecoveryStrategy -Root $root -App 'no-such-app-xyz.exe'
+    if (@($lean.paths).Count -ne 0) { $p += "周期探针里出现了 $(@($lean.paths).Count) 条兜底位置（会拖慢哨兵首轮）" }
+    return $p
+}
+
+Case 'Z2 指纹：OLE 头判成文档、纯文本判成文本、全零文件不炸也不冒充文档' {
+    # ★ 2026-10-29（优化①）：「命中 ≠ 内容有效」—— 候选必须能一眼看出像不像真文档
+    $p = @()
+    $d = Join-Path $fx 'fp'
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+    $ole = Join-Path $d 'a.asd'
+    [System.IO.File]::WriteAllBytes($ole, [byte[]](0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0))
+    $r1 = Get-ErrwatchFileFingerprint $ole
+    if ($r1.kind -ne 'ole') { $p += "OLE 头判成了 $($r1.kind)（应 ole）" }
+    if (-not $r1.trustworthy) { $p += 'OLE 容器被判成不可信（会误导用户以为文件坏了）' }
+    $txt = Join-Path $d 'b.txt'
+    Set-Content -LiteralPath $txt -Value 'hello world' -Encoding UTF8 -NoNewline
+    $r2 = Get-ErrwatchFileFingerprint $txt
+    if ($r2.kind -ne 'text') { $p += "纯文本判成了 $($r2.kind)（应 text）" }
+    $zero = Join-Path $d 'c.bin'
+    [System.IO.File]::WriteAllBytes($zero, [byte[]](0, 0, 0, 0, 0, 0))
+    $r3 = Get-ErrwatchFileFingerprint $zero
+    if (-not $r3.kind) { $p += '全零文件没有返回 kind（不许炸）' }
+    if ($r3.trustworthy) { $p += '全零文件被判成 trustworthy（会误导用户）' }
+    $r4 = Get-ErrwatchFileFingerprint (Join-Path $d 'nope.bin')
+    if (-not $r4.kind) { $p += '不存在的文件没有返回 kind（不许抛）' }
+    return $p
+}
+
 Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''

@@ -113,10 +113,18 @@ Case 'D 真跑：改 settings.json 后 15 秒内 watched 必须变化' {
             [System.IO.File]::WriteAllText((Join-Path $tmp 'settings.json'), ($cfg0 | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding $false))
 
             # 起独立哨兵（独立 StateDir + InstanceName，不碰生产）
-            $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'errwatch-sentinel.ps1'),
+            # ★ 2026-10-29：变量**不能叫 $args** —— 那是 scriptblock 的自动变量，
+            #   在 Case 的 scriptblock 里赋值不生效（静默为空），于是 Start-Process
+            #   起了个不带参数的空 pwsh、立刻退出，本用例就报「哨兵没有写出 status」。
+            #   实测复刻：同样的参数换个变量名就正常写出 status。
+            $sArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'errwatch-sentinel.ps1'),
                       '-DurationSec', '22', '-InstanceName', 'test-watchreload',
                       '-StateDir', $tmp, '-Config', (Join-Path $root 'core\sentinel.json'))
-            $sent = Start-Process -FilePath $ps -ArgumentList $args -PassThru -WindowStyle Hidden
+            # 输出重定向到文件：避免子进程写 stdout 时被调用方的管道缓冲拖住
+            $outFile = Join-Path $tmp 'sentinel.stdout.txt'
+            $errFile = Join-Path $tmp 'sentinel.stderr.txt'
+            $sent = Start-Process -FilePath $ps -ArgumentList $sArgs -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile
             Start-Sleep -Seconds 8
             $st1 = $null
             $sf = Join-Path $tmp 'sentinel-status.json'

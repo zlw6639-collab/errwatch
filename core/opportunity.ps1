@@ -105,8 +105,74 @@ function Test-ErrwatchPathAllowed([string]$Path) {
 }
 
 # ── 策略库（数据驱动；引擎里不写死某个软件的恢复流程）────────────────────
+# ── 未收录程序的兜底位置（2026-10-29 优化②）────────────────────────────────
+# 为什么要有：策略表只覆盖 8 类软件，其它程序一律给「没找到恢复文件」——
+# 实测 VRChat 这类程序确实有东西（output_log 在 %USERPROFILE%\AppData\LocalLow\<厂商>），
+# 用户看到的结论却是「没救」，比现实悲观。
+# 边界（刻意收得很紧）：
+#   · 只给 4 个通用位置，不进 exe 目录、不按厂商名猜路径（猜错等于让用户白翻）
+#   · 只看 maxAgeMinutes 内动过的文件（%TEMP% 有几万个历史文件，全列等于没信息）
+#   · 全部标 generic=true —— 调用方必须说清「这是通用兜底，不是它的官方恢复位置」
+function Get-ErrwatchGenericRecoverySpecs {
+    $list = New-Object System.Collections.ArrayList
+    [void]$list.Add([pscustomobject]@{ path = '%TEMP%'; filter = '*'; recurse = $false; generic = $true; maxAgeMinutes = 30 })
+    [void]$list.Add([pscustomobject]@{ path = '%LOCALAPPDATA%\Temp'; filter = '*'; recurse = $false; generic = $true; maxAgeMinutes = 30 })
+    [void]$list.Add([pscustomobject]@{ path = '%USERPROFILE%\AppData\LocalLow'; filter = '*'; recurse = $true; generic = $true; maxAgeMinutes = 30 })
+    [void]$list.Add([pscustomobject]@{ path = '%USERPROFILE%\Documents'; filter = '*'; recurse = $false; generic = $true; maxAgeMinutes = 30 })
+    return $list.ToArray()
+}
+
+# ── 文件指纹（2026-10-29 优化①）────────────────────────────────────────────
+# 解决的是救援里最难受的一句话：「命中 ≠ 内容有效」。
+# 用户候选列表里有 3 个 .asd，一个 10-24、一个 08-12，光看名字和时间根本判断不了。
+# 这里只读**头部 16 字节**（仍然不解析内容），按魔数说「它像个什么」：
+#   OLE  → Word/Excel 的容器（.asd 就是这种），像真的
+#   ZIP  → Office 2007+ / 各种备份包，像真的
+#   纯文本 / JSON → 像日志或草稿
+#   其它 → 说不像什么，但**不许**说「不是文档」（加密/私有格式也可能是真东西）
+function Get-ErrwatchFileFingerprint {
+    param([string]$Path)
+    $res = [pscustomobject]@{ kind = 'unknown'; label = '看不出格式'; trustworthy = $false }
+    $buf = New-Object byte[] 16
+    $n = 0
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { $n = $fs.Read($buf, 0, 16) } finally { $fs.Dispose() }
+    } catch {
+        return [pscustomobject]@{ kind = 'unreadable'; label = '读不到开头（被占用/无权限）'; trustworthy = $false }
+    }
+    if ($n -lt 4) { return $res }
+    $hex = (0..([Math]::Min($n, 8) - 1) | ForEach-Object { $buf[$_].ToString('X2') }) -join ''
+    if (-not $hex) { $hex = '' }
+    if ($hex.StartsWith('D0CF11E0A1B11AE1')) { return [pscustomobject]@{ kind = 'ole'; label = 'Office 容器（Word/Excel 等，像是真文档）'; trustworthy = $true } }
+    if ($hex.StartsWith('504B0304')) { return [pscustomobject]@{ kind = 'zip'; label = 'ZIP/Office 2007+ 容器（像是真文档）'; trustworthy = $true } }
+    if ($hex.StartsWith('38425053')) { return [pscustomobject]@{ kind = 'psd'; label = 'Photoshop 文档'; trustworthy = $true } }
+    if ($hex.StartsWith('89504E47')) { return [pscustomobject]@{ kind = 'png'; label = 'PNG 图片'; trustworthy = $true } }
+    if ($hex.StartsWith('FFD8FF')) { return [pscustomobject]@{ kind = 'jpeg'; label = 'JPEG 图片'; trustworthy = $true } }
+    if ($hex.StartsWith('47494638')) { return [pscustomobject]@{ kind = 'gif'; label = 'GIF 图片'; trustworthy = $true } }
+    # 文本：UTF-8 BOM、'{'（JSON）、或前 16 字节全是可打印字符/常见空白
+    $printable = $true
+    for ($i = 0; $i -lt $n; $i++) {
+        $b = $buf[$i]
+        if ($b -eq 0) { $printable = $false; break }
+        if ($b -lt 0x09) { $printable = $false; break }
+    }
+    if ($hex.StartsWith('EFBBBF') -or $printable) {
+        return [pscustomobject]@{ kind = 'text'; label = '文本 / JSON / 日志'; trustworthy = $true }
+    }
+    return [pscustomobject]@{ kind = 'unknown'; label = '私有或加密格式（说不清，不等于没内容）'; trustworthy = $false }
+}
+
 function Get-ErrwatchRecoveryStrategy {
-    param([string]$Root, [string]$App, [string]$StrategyFile = '')
+    param(
+        [string]$Root,
+        [string]$App,
+        [string]$StrategyFile = '',
+        # ★ 2026-10-29（性能回归自查）：兜底位置会扫 %TEMP% / LocalLow（本机 4 万文件），
+        #   放进哨兵的**周期探针**里会把首轮拖到写不出 status（门禁因此红了）。
+        #   所以默认关闭，只有用户主动点救援（recover）时才打开。
+        [switch]$AllowGeneric
+    )
 
     $path = if ($StrategyFile) { $StrategyFile } else { Join-Path $Root 'core\recover.json' }
     $cfg = $null
@@ -139,7 +205,14 @@ function Get-ErrwatchRecoveryStrategy {
 
     # ★ 2026-10-24：合并用户设置的额外目录（只追加，不改 core 默认值）。
     #   没装 settings.ps1 / 设置文件坏掉时静默跳过 —— 用户设置不该让救援失效。
+    # ★ 2026-10-29（优化②）：没匹配到任何 match（程序未收录）时，给「通用兜底位置」。
+    #   只在最近 30 分钟内、只 4 个通用目录、全部标 generic —— 结论里会明说这不是它官方的位置。
     $paths = @($hit.paths)
+    $usedGeneric = $false
+    if (-not $hitMatch -and $AllowGeneric) {
+        $paths = @(Get-ErrwatchGenericRecoverySpecs)
+        $usedGeneric = $true
+    }
     if (Get-Command Get-ErrwatchRecoveryExtraPaths -ErrorAction SilentlyContinue) {
         try {
             $extraPaths = @(Get-ErrwatchRecoveryExtraPaths -Root $Root -App $App)
@@ -262,10 +335,12 @@ function Invoke-ErrwatchRecoveryProbe {
         # 递归扫描很贵：默认限制单条规则的命中数，避免某个大目录把哨兵拖住
         [int]$MaxPerSpec = 40,
         # sentinel 只要摘要；recover 要逐个文件列表
-        [switch]$IncludeItems
+        [switch]$IncludeItems,
+        # 只在用户主动救援时才有意义：未收录程序也去通用位置翻（见 Get-ErrwatchRecoveryStrategy 注释）
+        [switch]$AllowGeneric
     )
 
-    $strat = Get-ErrwatchRecoveryStrategy -Root $Root -App $App -StrategyFile $StrategyFile
+    $strat = Get-ErrwatchRecoveryStrategy -Root $Root -App $App -StrategyFile $StrategyFile -AllowGeneric:$AllowGeneric
     $specs = @()
     $total = 0
     $newest = $null
@@ -350,6 +425,20 @@ function Invoke-ErrwatchRecoveryProbe {
             $s.note = '扫描失败（可能权限不足）'
         }
 
+        # ★ 2026-10-29（优化②）：generic 兜底位置只看「最近动过的」文件。
+        #   %TEMP% 里通常躺着几万个历史文件，全列出来等于没有信息 —— 用户要的是
+        #   「刚才那几分钟里它写了什么」，所以按 spec.maxAgeMinutes 再切一刀。
+        $maxAge = 0
+        if ($spec.PSObject.Properties['maxAgeMinutes'] -and $spec.maxAgeMinutes) {
+            try { $maxAge = [double]$spec.maxAgeMinutes } catch { $maxAge = 0 }
+        }
+        if ($maxAge -gt 0 -and @($items).Count -gt 0) {
+            $cut = $Now.AddMinutes(-1 * $maxAge)
+            $items = @($items | Where-Object { $_.LastWriteTime -ge $cut })
+            if ($s.note) { $s.note += '；' }
+            $s.note += "只看最近 $([int]$maxAge) 分钟内动过的"
+        }
+
         # B2：把「没权限看」与「确实没有」分开记。少扫到的东西不会自己说话，必须让它留下痕迹。
         if (@($scanErrs).Count -gt 0) {
             $denied = @($scanErrs | Where-Object {
@@ -377,12 +466,18 @@ function Invoke-ErrwatchRecoveryProbe {
                 $newestPath = $it.FullName
             }
             if ($IncludeItems) {
+                # ★ 2026-10-29（优化①）：候选带上「头部指纹」—— 只读 16 字节，不解析内容。
+                #   不这么做的话，用户面对 3 个 .asd 只能靠名字和时间猜哪个是刚丢的那份。
+                $fp = Get-ErrwatchFileFingerprint $it.FullName
                 $keep += [pscustomobject]@{
                     Path             = $it.FullName
                     Length           = $it.Length
                     LastWriteTime    = $it.LastWriteTime.ToString('MM-dd HH:mm:ss')
                     LastWriteTimeRaw = $it.LastWriteTime
                     Rule             = "$raw / $filter"
+                    Fingerprint      = [string]$fp.kind
+                    FingerprintLabel = [string]$fp.label
+                    Trustworthy      = [bool]$fp.trustworthy
                 }
             }
         }
