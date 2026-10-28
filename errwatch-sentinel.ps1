@@ -1424,11 +1424,16 @@ function Invoke-Check {
                         $wasFg   = ($prevFgPid -gt 0 -and [int]$prevFgPid -eq [int]$p.pid)
                         $idleNow = Get-IdleSeconds
                     # 退出码：只有监视期间持有过句柄才拿得到（拿不到=$null，判定会按「宁扰不漏」处理）
+                    # ★ 2026-10-29（用户实测：托盘里 7 条「进程消失」全是 exit=NULL / 取证失败）：
+                    #   WaitForExit(0) 只问「句柄是否**已经**信号化」—— 进程刚消失那一刻经常还是 false，
+                    #   于是退出码恒为 null，全按 unknown-exit 进待处理（「宁扰不漏」的代价被放大成噪音）。
+                    #   给 250ms 短等：内核对象信号化通常在毫秒级，句柄一信号化就能读到真实退出码；
+                    #   真的拿不到（pid 复用 / 句柄已失效）才保持 null，判定逻辑不变。
                     $exitCode = $null
                     try {
                         $procRef = $script:procRefs[[int]$p.pid]
                         if ($procRef) {
-                            if ($procRef.WaitForExit(0)) { $exitCode = $procRef.ExitCode }
+                            if ($procRef.WaitForExit(250)) { $exitCode = $procRef.ExitCode }
                             $procRef.Dispose()
                         }
                         $script:procRefs.Remove([int]$p.pid)

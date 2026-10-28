@@ -430,9 +430,14 @@ function Get-SentinelWhy($e) {
     if ([string]$e.verdict -eq 'recovered') {
         $r = ''
         if ($e.PSObject.Properties['recoveryReason'] -and $e.recoveryReason) { $r = [string]$e.recoveryReason }
-        $txt = '这次崩溃之后，程序已经重新跑起来了（已自动归位，不用再手动处理）'
-        if ($r) { $txt += "：$r" }
-        $txt += '。但这**只说明它恢复运行了，不代表问题解决了** —— 崩溃原因还没查清，同样的崩溃可能再出现'
+        # ★ 2026-10-29（用户抓到真实案例，把这段文案贴回来）：原来外层写
+        #   「这次崩溃之后，程序已经重新跑起来了」，冒号后 recoveryReason 又写
+        #   「程序崩后重新跑起来了」—— 同一句话正反说了两遍，而且末尾第三次说「恢复运行了」。
+        #   现在外层只给结论（已归位 / 不用管），事实（稳定多久、窗口在不在）交给 reason 一句说完。
+        #   末尾必须保留「不代表问题解决」—— 那是用户明确要求的措辞（test-recovery S 守着它）。
+        $txt = '已自动归位 —— 不用再手动处理这条'
+        if ($r) { $txt += "（$r）" }
+        $txt += '。但这只说明它能用了，不代表问题解决 —— 崩溃原因还没查清，同样的崩溃可能再出现'
         return $txt
     }
     if ([string]$e.verdict -eq 'crash-suspected') {
