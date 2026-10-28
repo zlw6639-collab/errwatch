@@ -179,6 +179,35 @@ Case 'H 降噪窗口可配置（默认 24，区间 1~168，越界忽略）' {
     return $p
 }
 
+# J. 2026-10-29（用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）：
+#    把授权从"现场问"改成"事先定"。这里守三件事：默认关闭、越界忽略、哨兵真的读它。
+Case 'J2 崩溃自动救援：开关可配置（默认关）、越界忽略、哨兵真的读它' {
+    $p = @()
+    $sf = Join-Path $tmp 'settings.json'
+    Remove-Item -LiteralPath $sf -Force -ErrorAction SilentlyContinue
+    $s = Get-ErrwatchSettings -Root $tmp
+    if ([bool]$s.recovery.autoRescue) { $p += '默认 autoRescue 应为 false（写盘是重动作，必须用户点头）' }
+    if ([int]$s.recovery.autoRescueMaxFiles -lt 1) { $p += '默认 autoRescueMaxFiles 异常' }
+    $s.recovery.autoRescue = $true
+    $s.recovery.autoRescueMaxFiles = 3
+    [void](Save-ErrwatchSettings -Root $tmp -Settings $s)
+    $r = Get-ErrwatchSettings -Root $tmp
+    if (-not [bool]$r.recovery.autoRescue) { $p += '写了 autoRescue=true 读回来还是 false' }
+    if ([int]$r.recovery.autoRescueMaxFiles -ne 3) { $p += "写了 maxFiles=3 读到 $($r.recovery.autoRescueMaxFiles)" }
+    # 越界值：一次搬几百个文件 / 0 分钟窗口，都必须被忽略
+    $bad = [ordered]@{ version = 1; recovery = [ordered]@{ autoRescue = $true; autoRescueMaxFiles = 999; autoRescueMinutes = 0 } }
+    $bad | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $sf -Encoding UTF8
+    $r2 = Get-ErrwatchSettings -Root $tmp
+    if ([int]$r2.recovery.autoRescueMaxFiles -eq 999) { $p += 'maxFiles=999 没被拦（会一次搬走几百个文件）' }
+    if ([int]$r2.recovery.autoRescueMinutes -eq 0) { $p += 'minutes=0 没被拦' }
+    # 哨兵侧接线：必须读开关、必须异步起子进程（阻塞主循环的代价是整轮 status 写不出）
+    $src = Get-Content -LiteralPath (Join-Path $root 'errwatch-sentinel.ps1') -Raw -Encoding UTF8
+    if ($src -notmatch 'autoRescue') { $p += '哨兵没有读 autoRescue（开了也不生效）' }
+    if ($src -notmatch "errwatch-recover\.ps1") { $p += '哨兵没有指向 errwatch-recover.ps1' }
+    if ($src -notmatch 'Start-Process -FilePath \$recExe') { $p += '哨兵没有异步起救援子进程（Start-Process $recExe）—— 同步跑会拖住主循环' }
+    return $p
+}
+
 # I. 2026-10-24（ISSUES.md B10）：设置窗从来没被自动验证过 —— 它坏了也没人知道。
 #    这里跑它的 -Check（无头），确认能初始化 + 读得到设置。加上即可防「改设置层把窗搞崩」。
 Case 'I 设置窗能初始化（-Check 冒烟）' {

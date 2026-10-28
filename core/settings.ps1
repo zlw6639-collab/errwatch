@@ -28,6 +28,8 @@ $script:EwSettingsRanges = @{
     storageFileDays  = @(1, 3650)      # 磁盘文件（副本/崩溃快照）保留天数
     uiWindowDays     = @(0, 3650)      # 主界面默认时间窗口（0 = 全部时间）
     uiPageSize       = @(0, 100000)    # 主界面默认条数上限（0 = 不限）
+    autoRescueMinutes  = @(1, 1440)    # 崩溃自动救援的时间窗（1 分钟 ~ 24 小时）
+    autoRescueMaxFiles = @(1, 50)      # 崩溃自动救援单次最多复制几个
 }
 
 # 弹窗策略的合法取值（2026-10-26）。白名单是**封闭**的：写错的模式一律退回默认，
@@ -44,7 +46,21 @@ function Get-ErrwatchSettingsDefaults {
         version     = 1
         diagnosis   = [pscustomobject]@{ maxDurationSeconds = 600 }
         autorespond = [pscustomobject]@{ deadlineMinutes = 30; defaultAction = 'notify-only' }
-        recovery    = [pscustomobject]@{ extraPaths = [pscustomobject]@{} }
+        # 2026-10-29（用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）：
+        #   把「救援授权」从**现场问**改成**事先定**：
+        #     autoRescue        = 崩溃时自动把候选复制一份（只复制、不改名、不覆盖）
+        #     autoRescueMinutes = 只救这个窗口内动过的候选（默认 30 分钟，别把历史垃圾也搬一遍）
+        #     autoRescueMaxFiles= 单次最多复制几个（默认 5，防止一次崩溃搬走几百个临时文件）
+        #   ★ 三个前提缺一不可，否则不启用：
+        #     ① 开关打开  ② storage.copyDir 已设（空目录 = 每次都问 → 又变成打扰）
+        #     ③ 候选确实落在配置的时间窗内
+        #   ★ 默认关闭：写盘是重动作，必须用户明确点头。
+        recovery    = [pscustomobject]@{
+            extraPaths         = [pscustomobject]@{}
+            autoRescue         = $false
+            autoRescueMinutes  = 30
+            autoRescueMaxFiles = 5
+        }
         # 2026-10-24（ISSUES.md B8）：降噪折叠窗口过去写死 24 小时。
         #   「同一程序 24 小时内只留一条 unknown-exit」对不同用户是不同答案：
         #   天天开关 Office 的人嫌吵，而偶尔用一次的人希望每条都留着。
@@ -279,6 +295,23 @@ function Get-ErrwatchSettings([string]$Root) {
     try {
         if ($raw.PSObject.Properties['recovery'] -and $raw.recovery.PSObject.Properties['extraPaths'] -and $raw.recovery.extraPaths) {
             $def.recovery.extraPaths = $raw.recovery.extraPaths
+        }
+    } catch { }
+
+    # 崩溃时自动救援（2026-10-29）：布尔 + 两个数值，越界一律退回默认（不猜用户意图）
+    try {
+        if ($raw.PSObject.Properties['recovery'] -and $raw.recovery) {
+            if ($raw.recovery.PSObject.Properties['autoRescue'] -and $null -ne $raw.recovery.autoRescue) {
+                $def.recovery.autoRescue = [bool]$raw.recovery.autoRescue
+            }
+            if ($raw.recovery.PSObject.Properties['autoRescueMinutes']) {
+                $v = ConvertTo-ErrwatchSettingNumber $raw.recovery.autoRescueMinutes $script:EwSettingsRanges.autoRescueMinutes[0] $script:EwSettingsRanges.autoRescueMinutes[1]
+                if ($null -ne $v) { $def.recovery.autoRescueMinutes = $v }
+            }
+            if ($raw.recovery.PSObject.Properties['autoRescueMaxFiles']) {
+                $v = ConvertTo-ErrwatchSettingNumber $raw.recovery.autoRescueMaxFiles $script:EwSettingsRanges.autoRescueMaxFiles[0] $script:EwSettingsRanges.autoRescueMaxFiles[1]
+                if ($null -ne $v) { $def.recovery.autoRescueMaxFiles = $v }
+            }
         }
     } catch { }
 

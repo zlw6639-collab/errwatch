@@ -1446,6 +1446,36 @@ function Invoke-Check {
                         $ev | Add-Member -NotePropertyName quiet -NotePropertyValue ([bool]$intent.quiet) -Force
                     } catch { }
                 }
+                # ★ 2026-10-29（用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）：
+                #   预授权自动救援 —— 崩了就不再问，按事先定好的规则直接复制一份。
+                #   三个前提缺一不可：① 开关打开 ② storage.copyDir 已设（否则每次都要选目录 = 又变成打扰）
+                #   ③ 不是 normal-exit（正常退出没有要救的东西）。
+                #   ★ 异步起子进程：这条主循环被阻塞过一次，代价是整轮 status 写不出（门禁实测红过）。
+                try {
+                    $autoOn = [bool]($stSet -and $stSet.PSObject.Properties['recovery'] -and
+                                      $stSet.recovery.PSObject.Properties['autoRescue'] -and $stSet.recovery.autoRescue)
+                    $autoDir = ''
+                    if ($stSet -and $stSet.PSObject.Properties['storage'] -and $stSet.storage.PSObject.Properties['copyDir']) {
+                        $autoDir = [string]$stSet.storage.copyDir
+                    }
+                    if ($autoOn -and $autoDir -and [string]$ev.verdict -ne 'normal-exit') {
+                        $recScript = Join-Path $root 'errwatch-recover.ps1'
+                        if (Test-Path -LiteralPath $recScript) {
+                            $autoMax = 5
+                            if ($stSet.recovery.PSObject.Properties['autoRescueMaxFiles'] -and $stSet.recovery.autoRescueMaxFiles) {
+                                $autoMax = [int]$stSet.recovery.autoRescueMaxFiles
+                            }
+                            $recExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                            if (Get-Command Get-ErrwatchPsExe -ErrorAction SilentlyContinue) {
+                                try { $cand = Get-ErrwatchPsExe; if ($cand) { $recExe = $cand } } catch { }
+                            }
+                            $recArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $recScript,
+                                         '-App', [string]$ev.app, '-SaveTo', $autoDir, '-MaxFiles', [string]$autoMax, '-Json')
+                            Start-Process -FilePath $recExe -ArgumentList $recArgs -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                            $ev | Add-Member -NotePropertyName autoRescue -NotePropertyValue ("started → $autoDir") -Force
+                        }
+                    }
+                } catch { }
                 if ($sess) {
                     [void](Write-Ack ([string]$ev.id) 'progress' 'complete' (New-ErrwatchDiagnosisCompleteMeta -Session $sess -Reason $reason))
                 }

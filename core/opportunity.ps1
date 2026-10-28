@@ -605,7 +605,11 @@ function Copy-ErrwatchRescueCandidates {
     param(
         [Parameter(Mandatory)][object[]]$Candidates,
         [Parameter(Mandatory)][string]$Destination,
-        [switch]$IncludeStale
+        [switch]$IncludeStale,
+        # ★ 2026-10-29（用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）：
+        #   自动救援（崩溃时不再问）必须有上限 —— 一次崩溃的候选可能有几十个临时文件，
+        #   无上限地搬等于替用户做了一次他没要求的磁盘操作。0 = 不限（手动备份的老行为）。
+        [int]$MaxFiles = 0
     )
     $result = [pscustomobject]@{
         destination = $Destination
@@ -614,6 +618,7 @@ function Copy-ErrwatchRescueCandidates {
         errors      = @()
         # 总大小：复制没有上限（用户显式要求），但要报告出来 —— VSCode / Notepad++ 的 filter 是 '*'
         totalBytes  = [long]0
+        limitHit    = $false
     }
     if (-not $Destination) { $result.errors += '没有指定保存目录'; return $result }
     $dest = $null
@@ -629,6 +634,12 @@ function Copy-ErrwatchRescueCandidates {
     foreach ($c in @($Candidates)) {
         if (-not $c -or -not $c.PSObject.Properties['Path'] -or -not $c.Path) { continue }
         $src = [string]$c.Path
+        # 自动救援的单次上限：到量就停，剩下的记为「没复制」并说明原因（不静默丢）
+        if ($MaxFiles -gt 0 -and @($result.copied).Count -ge $MaxFiles) {
+            $result.limitHit = $true
+            $result.skipped += [pscustomobject]@{ source = $src; reason = "超过单次上限 $MaxFiles 个（崩溃自动救援才有上限；手动备份不受限）" }
+            continue
+        }
         if ($c.PSObject.Properties['freshness'] -and [string]$c.freshness -eq 'STALE' -and -not $IncludeStale) {
             $result.skipped += [pscustomobject]@{ source = $src; reason = '历史遗留（要连旧的也复制，加 -IncludeStale）' }
             continue

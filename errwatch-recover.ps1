@@ -53,7 +53,11 @@ param(
     #   现在一次扫描、人话照旧、清单落盘，后面只认这份清单。
     [string]$SnapshotOut = '',
     # 连「历史遗留」那一档也一起复制（默认不复制旧文件，避免救回一堆过期的）
-    [switch]$IncludeStale
+    [switch]$IncludeStale,
+    # ★ 2026-10-29（用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）：
+    #   崩溃自动救援（settings.recovery.autoRescue）由哨兵调用本脚本，必须带单次上限 ——
+    #   无上限地替用户搬几十个临时文件，等于一次他没要求的磁盘操作。0 = 不限（手动备份）。
+    [int]$MaxFiles = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -517,6 +521,7 @@ if ($SaveTo) {
             # 触发「无法使用指定的命名参数解析参数集」（实测踩到）。
             $copyArgs = @{ Candidates = $candidates; Destination = $SaveTo }
             if ($IncludeStale) { $copyArgs['IncludeStale'] = $true }
+            if ($MaxFiles -gt 0) { $copyArgs['MaxFiles'] = $MaxFiles }
             $copy = Copy-ErrwatchRescueCandidates @copyArgs
             $r.rescued = $copy
             foreach ($x in @($copy.copied)) { $r.notes += ("已保存副本：{0}（{1:N1} KB）" -f $x.target, ($x.bytes / 1KB)) }

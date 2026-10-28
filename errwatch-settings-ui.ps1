@@ -1066,6 +1066,18 @@ $copyDirHint = if ([string]::IsNullOrWhiteSpace([string]$s.storage.copyDir)) {
 }
 $pageStorage.Controls.Add((New-Hint $copyDirHint 22 234 540))
 
+# ── 崩溃时自动救援（2026-10-29 用户：「崩溃提示授权可以做成选择吗？不然很紧急的时候」）
+# 现场问 = 最紧急的时候还要做决定。改成事先授权：崩了就按这里的规则直接复制，
+# 不再弹窗问目录、也不再要人点确认。边界写在标签里，用户一眼能看见代价。
+$chkAutoRescue = New-Object System.Windows.Forms.CheckBox
+$chkAutoRescue.Text = '崩溃时自动把恢复文件复制一份到上面的目录（只复制本次会话/今天的，最多 5 个）'
+$chkAutoRescue.Location = New-Object System.Drawing.Point(26, 262)
+$chkAutoRescue.Size = New-Object System.Drawing.Size(560, 24)
+$chkAutoRescue.ForeColor = $cText
+$chkAutoRescue.Checked = $false
+try { if ($s.recovery.PSObject.Properties['autoRescue']) { $chkAutoRescue.Checked = [bool]$s.recovery.autoRescue } } catch { }
+$pageStorage.Controls.Add($chkAutoRescue)
+
 $btnStoragePreview = New-Action '看看有哪些过时文件' 22 292 170
 $pageStorage.Controls.Add($btnStoragePreview)
 $btnStorageClean = New-Action '一键删除过时…' 200 292 140
@@ -1633,6 +1645,21 @@ $btnSave.Add_Click({
         $st.storage.keepDays = $vKeep
         $st.storage.fileKeepDays = $vFKeep
         $st.storage.copyDir = $copyDir
+
+        # ★ 2026-10-29：自动救援开关。勾了却没固定目录 → 直接拒绝保存并说清原因，
+        #   否则用户以为自己开了，实际每次崩溃都因为「没有目录」而什么都没做（静默失效最难查）。
+        if ($chkAutoRescue.Checked -and -not $copyDir) {
+            [void][System.Windows.Forms.MessageBox]::Show("要开启「崩溃时自动复制」，必须先设好上面的「救援副本目录」。`n`n否则崩溃时程序不知道该往哪复制，等于没开。")
+            return
+        }
+        if (-not $st.PSObject.Properties['recovery'] -or -not $st.recovery) {
+            $st | Add-Member -NotePropertyName recovery -NotePropertyValue ([pscustomobject]@{ extraPaths = [pscustomobject]@{} }) -Force
+        }
+        if ($st.recovery.PSObject.Properties['autoRescue']) { $st.recovery.autoRescue = [bool]$chkAutoRescue.Checked }
+        else { $st.recovery | Add-Member -NotePropertyName autoRescue -NotePropertyValue ([bool]$chkAutoRescue.Checked) -Force }
+        if (-not $st.recovery.PSObject.Properties['autoRescueMaxFiles']) {
+            $st.recovery | Add-Member -NotePropertyName autoRescueMaxFiles -NotePropertyValue 5 -Force
+        }
 
         # 显示与加载（2026-10-26）：时间窗口 + 条数上限。
         # 两项都允许 0（0 天 = 全部时间，0 条 = 不限条数），所以区间下限就是 0 ——
